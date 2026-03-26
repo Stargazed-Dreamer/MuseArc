@@ -4,6 +4,7 @@ import json
 from collections.abc import Iterable
 from dataclasses import asdict
 from datetime import datetime, timezone
+from pathlib import Path
 
 from musearc.core.models import LyricsInsert, ReviewItem, TrackInsert, UndoAction
 
@@ -440,10 +441,32 @@ class LibraryRepository:
         ).fetchone()
         return dict(row) if row else None
 
+    def get_lyrics_by_ids(self, lyrics_ids: Iterable[str]) -> list[dict]:
+        ids = [v for v in lyrics_ids if v]
+        if not ids:
+            return []
+        placeholders = _placeholders(len(ids))
+        rows = self.conn.execute(
+            f"""
+            SELECT lyrics_id, source_relpath, storage_relpath, text_hash, raw_encoding,
+                   lyrics_title, lyrics_artist, lyrics_album, lyrics_author, line_count,
+                   imported_at, deleted_at, ext_json
+            FROM lyrics
+            WHERE lyrics_id IN ({placeholders})
+            """,
+            tuple(ids),
+        ).fetchall()
+        out: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            src = str(item.get("source_relpath", "") or "")
+            item["file_name"] = src.replace("\\", "/").split("/")[-1] if src else ""
+            out.append(item)
+        return out
+
     def insert_lyrics(self, item: LyricsInsert) -> str:
         existing = self.get_lyrics_id_by_hash(item.text_hash)
         if existing:
-            self.conn.execute("UPDATE lyrics SET deleted_at = NULL WHERE lyrics_id = ?", (existing,))
             return existing
         self.conn.execute(
             """
@@ -514,6 +537,20 @@ class LibraryRepository:
             (track_id,),
         ).fetchone()
         return dict(row) if row else None
+
+    def get_primary_lyrics_id_for_track(self, track_id: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT lyrics_id FROM track_lyrics WHERE track_id = ? AND is_primary = 1 ORDER BY created_at DESC LIMIT 1",
+            (track_id,),
+        ).fetchone()
+        return str(row[0]) if row and row[0] else None
+
+    def get_primary_track_id_for_lyrics(self, lyrics_id: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT track_id FROM track_lyrics WHERE lyrics_id = ? AND is_primary = 1 ORDER BY created_at DESC LIMIT 1",
+            (lyrics_id,),
+        ).fetchone()
+        return str(row[0]) if row and row[0] else None
 
     def list_lyrics(self, limit: int = 5000) -> list[dict]:
         rows = self.conn.execute(
@@ -596,24 +633,69 @@ class LibraryRepository:
         if not ids or not fields:
             return 0
 
-        allowed = {"file_name", "lyrics_title", "lyrics_artist", "lyrics_album", "lyrics_author"}
-        patch = {k: v for k, v in fields.items() if k in allowed}
-        if not patch:
-            return 0
+        direct_allowed = {"lyrics_title", "lyrics_artist", "lyrics_album", "lyrics_author"}
+        patch_direct_raw = {k: v for k, v in fields.items() if k in direct_allowed}
+        patch_direct: dict[str, str] = {}
+        for key, value in patch_direct_raw.items():
+            if isinstance(value, (list, tuple)):
+                value = value[0] if value else ""
+            elif isinstance(value, set):
+                value = next(iter(value)) if value else ""
+            elif isinstance(value, dict):
+                value = ""
+            patch_direct[key] = str(value or "").strip()
 
-        set_items = [f"{k} = ?" for k in patch.keys()]
+        updated = 0
         placeholders = _placeholders(len(ids))
-        params = [*patch.values(), *ids]
-        cursor = self.conn.execute(
-            f"""
-            UPDATE lyrics
-            SET {", ".join(set_items)}
-            WHERE lyrics_id IN ({placeholders})
-              AND deleted_at IS NULL
-            """,
-            tuple(params),
-        )
-        return int(cursor.rowcount or 0)
+        if patch_direct:
+            set_items = [f"{k} = ?" for k in patch_direct.keys()]
+            params = [*patch_direct.values(), *ids]
+            cursor = self.conn.execute(
+                f"""
+                UPDATE lyrics
+                SET {", ".join(set_items)}
+                WHERE lyrics_id IN ({placeholders})
+                  AND deleted_at IS NULL
+                """,
+                tuple(params),
+            )
+            updated += int(cursor.rowcount or 0)
+
+        if "file_name" in fields:
+            file_name_raw = fields.get("file_name")
+            if isinstance(file_name_raw, (list, tuple)):
+                file_name_raw = file_name_raw[0] if file_name_raw else ""
+            elif isinstance(file_name_raw, set):
+                file_name_raw = next(iter(file_name_raw)) if file_name_raw else ""
+            elif isinstance(file_name_raw, dict):
+                file_name_raw = ""
+            target_name = str(file_name_raw or "").strip()
+            rows = self.conn.execute(
+                f"SELECT lyrics_id, source_relpath FROM lyrics WHERE lyrics_id IN ({placeholders}) AND deleted_at IS NULL",
+                tuple(ids),
+            ).fetchall()
+            for row in rows:
+                old_rel = str(row["source_relpath"] or "")
+                old_path = Path(old_rel.replace("\\", "/"))
+                parent = old_path.parent.as_posix()
+                old_name = old_path.name or f"{row['lyrics_id']}.lrc"
+                new_name = target_name or old_name
+                new_name = new_name.replace("\\", "/").split("/")[-1].strip()
+                if not new_name:
+                    new_name = old_name
+                if "." not in Path(new_name).name:
+                    suffix = Path(old_name).suffix
+                    if suffix:
+                        new_name = f"{new_name}{suffix}"
+                new_rel = new_name if parent in {"", "."} else f"{parent.rstrip('/')}/{new_name}"
+                if new_rel == old_rel:
+                    continue
+                cursor = self.conn.execute(
+                    "UPDATE lyrics SET source_relpath = ? WHERE lyrics_id = ? AND deleted_at IS NULL",
+                    (new_rel, row["lyrics_id"]),
+                )
+                updated += int(cursor.rowcount or 0)
+        return updated
 
     def delete_lyrics(self, lyrics_ids: Iterable[str]) -> list[str]:
         ids = [v for v in lyrics_ids if v]
@@ -645,6 +727,17 @@ class LibraryRepository:
         )
         return int(cursor.rowcount or 0)
 
+    def restore_lyrics(self, lyrics_ids: Iterable[str]) -> int:
+        ids = [v for v in lyrics_ids if v]
+        if not ids:
+            return 0
+        placeholders = _placeholders(len(ids))
+        cursor = self.conn.execute(
+            f"UPDATE lyrics SET deleted_at = NULL WHERE lyrics_id IN ({placeholders})",
+            tuple(ids),
+        )
+        return int(cursor.rowcount or 0)
+
     def linked_lyrics_ids_for_tracks(self, track_ids: Iterable[str]) -> list[str]:
         ids = [track_id for track_id in track_ids if track_id]
         if not ids:
@@ -652,6 +745,24 @@ class LibraryRepository:
         placeholders = _placeholders(len(ids))
         rows = self.conn.execute(
             f"SELECT DISTINCT lyrics_id FROM track_lyrics WHERE track_id IN ({placeholders})",
+            tuple(ids),
+        ).fetchall()
+        return [str(r[0]) for r in rows if r and r[0]]
+
+    def linked_lyrics_storage_relpaths_for_tracks(self, track_ids: Iterable[str]) -> list[str]:
+        ids = [track_id for track_id in track_ids if track_id]
+        if not ids:
+            return []
+        placeholders = _placeholders(len(ids))
+        rows = self.conn.execute(
+            f"""
+            SELECT DISTINCT l.storage_relpath
+            FROM track_lyrics tl
+            JOIN lyrics l ON l.lyrics_id = tl.lyrics_id
+            WHERE tl.track_id IN ({placeholders})
+              AND l.storage_relpath IS NOT NULL
+              AND l.storage_relpath != ''
+            """,
             tuple(ids),
         ).fetchall()
         return [str(r[0]) for r in rows if r and r[0]]

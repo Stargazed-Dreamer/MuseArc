@@ -239,11 +239,16 @@ class TracksPage(QWidget):
             return
         if key == "custom_order":
             return
-        if key.startswith("tag:"):
-            tag_name = key.split(":", 1)[1]
-            self.facade.update_track_tag_values([track_id], tag_name, str(value))
-        else:
-            self.facade.update_tracks_fields([track_id], {key: value})
+        try:
+            if key.startswith("tag:"):
+                tag_name = key.split(":", 1)[1]
+                self.facade.update_track_tag_values([track_id], tag_name, str(value))
+            else:
+                self.facade.update_tracks_fields([track_id], {key: value})
+        except Exception as exc:
+            QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
+            self.reload_tracks_from_db()
+            return
         for row in self.all_rows:
             if row.get("track_id") == track_id:
                 if key.startswith("tag:"):
@@ -631,16 +636,26 @@ class PlaylistPage(QWidget):
                 parsed = int(value)
             except Exception:
                 return
-            self.facade.update_playlist_entries(self.current_playlist_id, {track_id: parsed})
+            try:
+                self.facade.update_playlist_entries(self.current_playlist_id, {track_id: parsed})
+            except Exception as exc:
+                QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
+                self.reload_playlist_tracks()
+                return
             self.reload_playlist_tracks()
             self.grid.select_track_ids([track_id])
             self.library_changed.emit()
             return
-        if key.startswith("tag:"):
-            tag_name = key.split(":", 1)[1]
-            self.facade.update_track_tag_values([track_id], tag_name, str(value))
-        else:
-            self.facade.update_tracks_fields([track_id], {key: value})
+        try:
+            if key.startswith("tag:"):
+                tag_name = key.split(":", 1)[1]
+                self.facade.update_track_tag_values([track_id], tag_name, str(value))
+            else:
+                self.facade.update_tracks_fields([track_id], {key: value})
+        except Exception as exc:
+            QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
+            self.reload_playlist_tracks()
+            return
         self.library_changed.emit()
 
     def _show_context_menu(self, pos, tracks: list[dict]) -> None:
@@ -968,11 +983,16 @@ class FullScanPage(QWidget):
     def on_track_field_edited(self, track_id: str, key: str, value) -> None:
         if not track_id or key == "custom_order":
             return
-        if key.startswith("tag:"):
-            tag_name = key.split(":", 1)[1]
-            self.facade.update_track_tag_values([track_id], tag_name, str(value))
-        else:
-            self.facade.update_tracks_fields([track_id], {key: value})
+        try:
+            if key.startswith("tag:"):
+                tag_name = key.split(":", 1)[1]
+                self.facade.update_track_tag_values([track_id], tag_name, str(value))
+            else:
+                self.facade.update_tracks_fields([track_id], {key: value})
+        except Exception as exc:
+            QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
+            self.on_work_changed()
+            return
         self.library_changed.emit()
 
     def _show_context_menu(self, pos, tracks: list[dict]) -> None:
@@ -1104,11 +1124,16 @@ class TrashPage(QWidget):
     def on_track_field_edited(self, track_id: str, key: str, value) -> None:
         if not track_id or key == "custom_order":
             return
-        if key.startswith("tag:"):
-            tag_name = key.split(":", 1)[1]
-            self.facade.update_track_tag_values([track_id], tag_name, str(value))
-        else:
-            self.facade.update_tracks_fields([track_id], {key: value})
+        try:
+            if key.startswith("tag:"):
+                tag_name = key.split(":", 1)[1]
+                self.facade.update_track_tag_values([track_id], tag_name, str(value))
+            else:
+                self.facade.update_tracks_fields([track_id], {key: value})
+        except Exception as exc:
+            QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
+            self.reload_trash()
+            return
 
     def _show_context_menu(self, pos, tracks: list[dict]) -> None:
         track_ids = [str(t.get("track_id", "")) for t in tracks if t.get("track_id")]
@@ -1375,11 +1400,17 @@ class TagManagementPage(QWidget):
     def _on_track_field_edited(self, track_id: str, key: str, value) -> None:
         if not track_id or key == "custom_order":
             return
-        if key.startswith("tag:"):
-            tag_name = key.split(":", 1)[1]
-            self.facade.update_track_tag_values([track_id], tag_name, str(value))
-        else:
-            self.facade.update_tracks_fields([track_id], {key: value})
+        try:
+            if key.startswith("tag:"):
+                tag_name = key.split(":", 1)[1]
+                self.facade.update_track_tag_values([track_id], tag_name, str(value))
+            else:
+                self.facade.update_tracks_fields([track_id], {key: value})
+        except Exception as exc:
+            QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
+            self._reload_tracks_for_current_tag()
+            self.reload_tags()
+            return
         self._reload_tracks_for_current_tag()
         self.reload_tags()
         self.library_changed.emit()
@@ -1773,7 +1804,12 @@ class LyricsManagementPage(QWidget):
     def _on_lyrics_field_edited(self, lyrics_id: str, key: str, value: object) -> None:
         if not lyrics_id:
             return
-        self.facade.update_lyrics_fields([lyrics_id], {key: value})
+        try:
+            self.facade.update_lyrics_fields([lyrics_id], {key: value})
+        except Exception as exc:
+            QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
+            self.reload_lyrics()
+            return
         for row in self._all_rows:
             if str(row.get("lyrics_id", "")) != lyrics_id:
                 continue

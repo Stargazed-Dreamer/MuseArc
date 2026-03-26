@@ -3,7 +3,6 @@
 import json
 import hashlib
 import html
-import math
 import difflib
 import re
 import shutil
@@ -28,6 +27,7 @@ from musearc.infra.db.repositories import LibraryRepository
 from musearc.infra.llm.client import LmStudioMatcher
 from musearc.infra.media.audio_io import decode_audio
 from musearc.infra.media.commands import MediaCommandError
+from musearc.infra.media.ffmpeg_tools import ffmpeg_path
 from musearc.infra.media.fingerprint import AcousticFingerprintEngine
 from musearc.infra.media.prober import MediaProbe
 from musearc.infra.media.transcoder import MediaTranscoder
@@ -163,19 +163,29 @@ class ImportService:
         llm = LmStudioMatcher(runtime_cfg.lmstudio) if runtime_cfg.lmstudio.enabled else None
         self.lyrics_matcher = LyricsMatcher(runtime_cfg.thresholds, llm)
 
-    def _prepare_loudness_normalized_audio(self, source_path: Path, temp_root: Path) -> tuple[Path, str | None]:
+    def _prepare_loudness_normalized_audio(
+        self,
+        source_path: Path,
+        temp_root: Path,
+        target_lufs: float = -14.0,
+    ) -> tuple[Path, str | None]:
         target = temp_root / f"{source_path.stem}__lufs14.wav"
         target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            ffmpeg = ffmpeg_path()
+        except Exception as exc:
+            return source_path, f"ffmpeg_unavailable:{exc}"
         cmd = [
-            "ffmpeg",
+            str(ffmpeg),
             "-hide_banner",
             "-loglevel",
             "error",
+            "-nostdin",
             "-y",
             "-i",
             str(source_path),
             "-af",
-            "loudnorm=I=-14:TP=-1.5:LRA=11",
+            f"loudnorm=I={float(target_lufs):.1f}:TP=-1.5:LRA=11",
             "-ar",
             "48000",
             "-ac",
@@ -212,31 +222,42 @@ class ImportService:
         scored.sort(key=lambda p: p[0], reverse=True)
         return [item for _score, item in scored[:limit]]
 
-    def _fingerprint_with_loudness_normalization(self, source_path: Path, target_lufs: float = -14.0) -> Fingerprint:
+    def _fingerprint_with_loudness_normalization(
+        self,
+        source_path: Path,
+        temp_root: Path,
+        target_lufs: float = -14.0,
+    ) -> Fingerprint:
+        normalized_path, error = self._prepare_loudness_normalized_audio(
+            source_path,
+            temp_root,
+            target_lufs=target_lufs,
+        )
+        if error:
+            raise MediaCommandError(error)
         try:
-            decoded = decode_audio(source_path, target_rate=22050, target_layout="mono")
-        except MediaCommandError:
-            raise
-        except Exception as exc:
-            raise MediaCommandError(f"decode_failed:{source_path}:{exc}") from exc
+            try:
+                decoded = decode_audio(normalized_path, target_rate=22050, target_layout="mono")
+            except MediaCommandError:
+                raise
+            except Exception as exc:
+                raise MediaCommandError(f"decode_failed:{source_path}:{exc}") from exc
 
-        samples = decoded.samples.astype(np.float32, copy=False)
-        if samples.size <= 0:
-            vector: list[int] = []
-        else:
-            rms = float(np.sqrt(np.mean(np.square(samples, dtype=np.float64))))
-            if not np.isfinite(rms) or rms <= 1e-12:
-                gain = 1.0
+            samples = decoded.samples.astype(np.float32, copy=False)
+            if samples.size <= 0:
+                vector: list[int] = []
             else:
-                loudness_db = 20.0 * math.log10(rms)
-                gain_db = max(-24.0, min(24.0, target_lufs - loudness_db))
-                gain = 10.0 ** (gain_db / 20.0)
-            normalized = np.clip(samples * gain, -1.0, 1.0)
-            vector = self.dependencies.fingerprint._fingerprint_vector(normalized, decoded.sample_rate)
+                vector = self.dependencies.fingerprint._fingerprint_vector(samples, decoded.sample_rate)
 
-        payload = self.dependencies.fingerprint.encode_vector(vector)
-        digest = hashlib.sha1(payload.encode("ascii")).hexdigest()
-        return Fingerprint(version=self.dependencies.fingerprint.version, vector=vector, digest=digest)
+            payload = self.dependencies.fingerprint.encode_vector(vector)
+            digest = hashlib.sha1(payload.encode("ascii")).hexdigest()
+            return Fingerprint(version=self.dependencies.fingerprint.version, vector=vector, digest=digest)
+        finally:
+            if normalized_path != source_path:
+                try:
+                    normalized_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     def import_path(
         self,
@@ -418,7 +439,9 @@ class ImportService:
 
         state.file_states = snapshot_file_states()
         emit("start", force=True)
-        for candidate in audio_files:
+        with tempfile.TemporaryDirectory(prefix="musearc_norm_") as _tmp_dir:
+            temp_root = Path(_tmp_dir)
+            for candidate in audio_files:
                 relpath = str(candidate.path.relative_to(source_path)).replace("\\", "/")
                 if relpath in processed_relpaths:
                     continue
@@ -469,8 +492,18 @@ class ImportService:
                 emit("audio_loudnorm", relpath)
                 emit("audio_fingerprint", relpath)
                 try:
-                    fp = self._fingerprint_with_loudness_normalization(candidate.path, target_lufs=-14.0)
+                    fp = self._fingerprint_with_loudness_normalization(
+                        candidate.path,
+                        temp_root,
+                        target_lufs=-14.0,
+                    )
                 except MediaCommandError as exc:
+                    err_text = str(exc)
+                    issue_title = "指纹提取失败"
+                    issue_reason = "指纹提取失败"
+                    if err_text.startswith("ffmpeg_unavailable") or err_text.startswith("loudnorm_failed"):
+                        issue_title = "响度归一不可用"
+                        issue_reason = "响度归一不可用"
                     state.errors.append(f"fingerprint_failed:{candidate.path}:{exc}")
                     state.review_items += 1
                     suggest_pool = repo.find_duplicate_candidates(probe.duration_sec, tolerance_sec=30.0)
@@ -479,7 +512,7 @@ class ImportService:
                         repo,
                         ReviewItem(
                             kind=ReviewKind.FILE_ISSUE,
-                            title="指纹提取失败",
+                            title=issue_title,
                             payload={
                                 "path": str(candidate.path),
                                 "error": str(exc),
@@ -490,13 +523,59 @@ class ImportService:
                             priority=3,
                         ),
                     )
-                    set_review(relpath, "指纹提取失败")
+                    set_review(relpath, issue_reason)
                     mark_processed(relpath)
                     continue
 
                 title, artist = _derive_title_artist(candidate.path, probe.title, probe.artist)
                 quality = _quality_score(probe.duration_sec, probe.bit_rate, candidate.ext)
                 fp_payload = self.dependencies.fingerprint.encode_vector(fp.vector)
+                set_processing(relpath, "源去重")
+                emit("audio_hash", relpath)
+                try:
+                    source_sha = sha256_file(candidate.path)
+                except Exception as exc:
+                    state.errors.append(f"hash_failed:{candidate.path}:{exc}")
+                    state.review_items += 1
+                    self._enqueue_review(
+                        repo,
+                        ReviewItem(
+                            kind=ReviewKind.FILE_ISSUE,
+                            title="源文件哈希失败",
+                            payload={"path": str(candidate.path), "error": str(exc)},
+                            priority=2,
+                        ),
+                    )
+                    set_review(relpath, "源文件哈希失败")
+                    mark_processed(relpath)
+                    continue
+
+                existing_by_sha = repo.get_track_by_source_sha(source_sha)
+                if existing_by_sha:
+                    if existing_by_sha.get("deleted_at"):
+                        state.review_items += 1
+                        self._enqueue_review(
+                            repo,
+                            ReviewItem(
+                                kind=ReviewKind.DUPLICATE,
+                                title="已删除歌曲重新导入",
+                                payload={
+                                    "path": str(candidate.path),
+                                    "score": 1.0,
+                                    "reason": "命中已删除曲目",
+                                    "existing_track_id": str(existing_by_sha.get("track_id", "") or ""),
+                                    "group_key": str(existing_by_sha.get("track_id", "") or "")[:8],
+                                },
+                                priority=2,
+                            ),
+                        )
+                        set_review(relpath, "命中已删除歌曲，待确认是否重新导入")
+                    else:
+                        state.duplicate_tracks += 1
+                        set_skipped(relpath, "source_sha256重复")
+                    mark_processed(relpath)
+                    continue
+
                 dedupe_candidates = repo.find_duplicate_candidates(probe.duration_sec)
                 decision = self.duplicate_evaluator.decide(
                     new_payload=fp_payload,
@@ -576,7 +655,7 @@ class ImportService:
                     storage_relpath=storage_rel,
                     source_relpath=relpath,
                     source_fullpath=str(candidate.path.resolve()),
-                    source_sha256=sha256_file(candidate.path),
+                    source_sha256=source_sha,
                     source_ext=candidate.ext,
                     probe_codec=probe.codec,
                     file_health=FileHealth.OK,
@@ -613,6 +692,35 @@ class ImportService:
                     mark_processed(relpath)
                     continue
 
+                if decision.existing_track_id:
+                    existing_rows = repo.get_tracks_by_ids([decision.existing_track_id])
+                    existing = existing_rows[0] if existing_rows else {}
+                    if existing:
+                        merge_patch: dict[str, object] = {}
+
+                        def _needs_fill(field_key: str, current: str) -> bool:
+                            text = str(current or "").strip().casefold()
+                            if field_key == "title":
+                                return text in {"", "unknown title", "unknown"}
+                            if field_key == "artist":
+                                return text in {"", "unknown artist", "unknown"}
+                            if field_key == "language_kind":
+                                return text in {"", "unknown"}
+                            return text == ""
+
+                        if _needs_fill("title", title) and str(existing.get("title", "")).strip():
+                            merge_patch["title"] = str(existing.get("title", "")).strip()
+                        if _needs_fill("artist", artist) and str(existing.get("artist", "")).strip():
+                            merge_patch["artist"] = str(existing.get("artist", "")).strip()
+                        if _needs_fill("album", probe.album or "") and str(existing.get("album", "")).strip():
+                            merge_patch["album"] = str(existing.get("album", "")).strip()
+                        if _needs_fill("language_kind", "unknown") and str(existing.get("language_kind", "")).strip():
+                            merge_patch["language_kind"] = str(existing.get("language_kind", "")).strip()
+                        if merge_patch:
+                            repo.update_tracks_fields([track_id], merge_patch)
+                            title = str(merge_patch.get("title", title))
+                            artist = str(merge_patch.get("artist", artist))
+
                 state.imported_tracks += 1
                 state.created_track_ids.append(track_id)
                 state.created_storage_relpaths.append(storage_rel)
@@ -639,9 +747,19 @@ class ImportService:
                     )
 
                 if decision.decision == DuplicateDecision.KEEP_NEW and decision.existing_track_id:
+                    old_relpaths = [
+                        str(r.get("storage_relpath", "") or "")
+                        for r in repo.get_tracks_by_ids([decision.existing_track_id])
+                        if str(r.get("storage_relpath", "") or "").strip()
+                    ]
                     deleted = repo.soft_delete_tracks([decision.existing_track_id])
                     if deleted > 0:
                         state.soft_deleted_existing_ids.append(decision.existing_track_id)
+                        for rel in old_relpaths:
+                            try:
+                                (self.library_root / rel).unlink(missing_ok=True)
+                            except Exception:
+                                pass
                     else:
                         state.review_items += 1
                         pending_review_reason = pending_review_reason or "预期替换旧版本但未删除"
@@ -733,9 +851,34 @@ class ImportService:
 
             text_hash = sha1_text(text)
             lyrics_author, line_count, lyrics_title, lyrics_artist, lyrics_album = _extract_lyrics_meta(text)
-            existing_lyrics_id = repo.get_lyrics_id_by_hash(text_hash)
-            if existing_lyrics_id:
-                lyrics_id = existing_lyrics_id
+            existing_lyrics = repo.get_lyrics_by_text_hash(text_hash)
+            if existing_lyrics and existing_lyrics.get("deleted_at"):
+                state.review_items += 1
+                lyrics_group_key = resolve_lyrics_group_key(relpath, text)
+                self._enqueue_review(
+                    repo,
+                    ReviewItem(
+                        kind=ReviewKind.LYRICS_MATCH,
+                        title="已删除歌词重新导入",
+                        payload={
+                            "lyrics_source": relpath,
+                            "lyrics_id": str(existing_lyrics.get("lyrics_id", "") or ""),
+                            "suggest_track_id": "",
+                            "score": 1.0,
+                            "reason": "命中已删除歌词",
+                            "lyrics_preview": text.splitlines()[:10],
+                            "group_key": lyrics_group_key,
+                            "lyrics_group_key": lyrics_group_key,
+                        },
+                        priority=2,
+                    ),
+                )
+                set_review(relpath, "命中已删除歌词，待确认是否重新导入")
+                mark_processed(relpath)
+                continue
+
+            if existing_lyrics:
+                lyrics_id = str(existing_lyrics.get("lyrics_id", "") or "")
             else:
                 lyrics_id = new_id("lrc")
                 lyrics_rel = shard_relpath("data/lyrics", lyrics_id, "lrc")

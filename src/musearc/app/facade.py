@@ -160,19 +160,38 @@ class MuseArcFacade:
 
     def delete_tracks(self, track_ids: list[str], *, mode: str = "move_linked_lyrics") -> int:
         delete_mode = mode if mode in {"move_linked_lyrics", "unlink_only"} else "move_linked_lyrics"
+        count = 0
+        deleted_track_relpaths: list[str] = []
+        deleted_lyrics_relpaths: list[str] = []
         with self.ctx.db.session() as conn:
             from musearc.infra.db.repositories import LibraryRepository
 
             repo = LibraryRepository(conn)
             affected = repo.get_tracks_by_ids(track_ids)
+            if delete_mode == "move_linked_lyrics":
+                deleted_lyrics_relpaths = repo.linked_lyrics_storage_relpaths_for_tracks(track_ids)
             count = LibraryOpsService(repo).delete_tracks(track_ids, mode=delete_mode)
             if count > 0:
+                deleted_track_relpaths = [
+                    str(r.get("storage_relpath", "") or "") for r in affected if str(r.get("storage_relpath", "")).strip()
+                ]
                 self._append_undo(
                     repo,
                     "soft_delete_tracks",
                     {"track_ids": [r["track_id"] for r in affected], "mode": delete_mode},
                 )
                 self._log(f"delete_tracks count={count} mode={delete_mode}")
+        if count > 0:
+            for rel in deleted_track_relpaths:
+                try:
+                    (self.ctx.layout.root / rel).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            for rel in deleted_lyrics_relpaths:
+                try:
+                    (self.ctx.layout.root / rel).unlink(missing_ok=True)
+                except Exception:
+                    pass
         return count
 
     def list_deleted_tracks(self, limit: int = 5000) -> list[dict]:
@@ -436,7 +455,20 @@ class MuseArcFacade:
         with self.ctx.db.session() as conn:
             from musearc.infra.db.repositories import LibraryRepository
 
-            LibraryOpsService(LibraryRepository(conn)).set_primary_lyrics_for_track(track_id, lyrics_id)
+            repo = LibraryRepository(conn)
+            old_lyrics = repo.get_primary_lyrics_id_for_track(track_id)
+            old_track_for_new = repo.get_primary_track_id_for_lyrics(lyrics_id) if lyrics_id else None
+            LibraryOpsService(repo).set_primary_lyrics_for_track(track_id, lyrics_id)
+            self._append_undo(
+                repo,
+                "set_primary_lyrics_for_track",
+                {
+                    "track_id": track_id,
+                    "new_lyrics_id": lyrics_id,
+                    "old_lyrics_id": old_lyrics,
+                    "old_track_for_new_lyrics": old_track_for_new,
+                },
+            )
         self._redo_actions.clear()
         self._log(f"set_primary_lyrics_for_track track={track_id} lyrics={lyrics_id}")
 
@@ -444,7 +476,20 @@ class MuseArcFacade:
         with self.ctx.db.session() as conn:
             from musearc.infra.db.repositories import LibraryRepository
 
-            LibraryOpsService(LibraryRepository(conn)).set_primary_track_for_lyrics(lyrics_id, track_id)
+            repo = LibraryRepository(conn)
+            old_track = repo.get_primary_track_id_for_lyrics(lyrics_id)
+            old_lyrics_for_new = repo.get_primary_lyrics_id_for_track(track_id) if track_id else None
+            LibraryOpsService(repo).set_primary_track_for_lyrics(lyrics_id, track_id)
+            self._append_undo(
+                repo,
+                "set_primary_track_for_lyrics",
+                {
+                    "lyrics_id": lyrics_id,
+                    "new_track_id": track_id,
+                    "old_track_id": old_track,
+                    "old_lyrics_for_new_track": old_lyrics_for_new,
+                },
+            )
         self._redo_actions.clear()
         self._log(f"set_primary_track_for_lyrics lyrics={lyrics_id} track={track_id}")
 
@@ -462,7 +507,31 @@ class MuseArcFacade:
         with self.ctx.db.session() as conn:
             from musearc.infra.db.repositories import LibraryRepository
 
-            count = LibraryOpsService(LibraryRepository(conn)).update_lyrics_fields(lyrics_ids, fields)
+            repo = LibraryRepository(conn)
+            before = repo.get_lyrics_by_ids(lyrics_ids)
+            count = LibraryOpsService(repo).update_lyrics_fields(lyrics_ids, fields)
+            if count > 0:
+                rollback_values = []
+                for row in before:
+                    rollback_values.append(
+                        {
+                            "lyrics_id": row.get("lyrics_id"),
+                            "file_name": row.get("file_name"),
+                            "lyrics_title": row.get("lyrics_title"),
+                            "lyrics_artist": row.get("lyrics_artist"),
+                            "lyrics_album": row.get("lyrics_album"),
+                            "lyrics_author": row.get("lyrics_author"),
+                        }
+                    )
+                self._append_undo(
+                    repo,
+                    "update_lyrics_fields",
+                    {
+                        "lyrics_ids": lyrics_ids,
+                        "applied_fields": dict(fields),
+                        "rollback_values": rollback_values,
+                    },
+                )
         if count > 0:
             self._redo_actions.clear()
             self._log(f"update_lyrics_fields count={count} fields={list(fields.keys())}")
@@ -472,7 +541,10 @@ class MuseArcFacade:
         with self.ctx.db.session() as conn:
             from musearc.infra.db.repositories import LibraryRepository
 
-            relpaths = LibraryOpsService(LibraryRepository(conn)).delete_lyrics(lyrics_ids)
+            repo = LibraryRepository(conn)
+            relpaths = LibraryOpsService(repo).delete_lyrics(lyrics_ids)
+            if relpaths:
+                self._append_undo(repo, "delete_lyrics", {"lyrics_ids": lyrics_ids, "relpaths": relpaths})
         for rel in relpaths:
             try:
                 (self.ctx.layout.root / rel).unlink(missing_ok=True)
@@ -482,6 +554,17 @@ class MuseArcFacade:
             self._redo_actions.clear()
             self._log(f"move_lyrics_to_trash count={len(relpaths)}")
         return len(relpaths)
+
+    def restore_lyrics(self, lyrics_ids: list[str]) -> int:
+        with self.ctx.db.session() as conn:
+            from musearc.infra.db.repositories import LibraryRepository
+
+            repo = LibraryRepository(conn)
+            count = LibraryOpsService(repo).restore_lyrics(lyrics_ids)
+            if count > 0:
+                self._append_undo(repo, "restore_lyrics", {"lyrics_ids": lyrics_ids})
+                self._log(f"restore_lyrics count={count}")
+            return count
 
     def read_logs(self) -> list[dict]:
         return read_action_logs(self.ctx.layout.root)
@@ -599,6 +682,12 @@ class MuseArcFacade:
             if t == "restore_tracks":
                 LibraryOpsService(repo).delete_tracks(payload.get("track_ids", []), mode="move_linked_lyrics")
                 return "ok:soft_delete_tracks"
+            if t == "delete_lyrics":
+                repo.restore_lyrics(payload.get("lyrics_ids", []))
+                return "ok:delete_lyrics"
+            if t == "restore_lyrics":
+                repo.move_lyrics_to_trash(payload.get("lyrics_ids", []))
+                return "ok:restore_lyrics"
             if t == "update_tracks_fields":
                 for row in payload.get("rollback_values", []):
                     track_id = row.get("track_id")
@@ -606,6 +695,46 @@ class MuseArcFacade:
                     if track_id:
                         repo.update_tracks_fields([track_id], patch)
                 return "ok:update_tracks_fields"
+            if t == "update_lyrics_fields":
+                for row in payload.get("rollback_values", []):
+                    lyrics_id = row.get("lyrics_id")
+                    if not lyrics_id:
+                        continue
+                    patch = {
+                        "file_name": row.get("file_name", ""),
+                        "lyrics_title": row.get("lyrics_title", ""),
+                        "lyrics_artist": row.get("lyrics_artist", ""),
+                        "lyrics_album": row.get("lyrics_album", ""),
+                        "lyrics_author": row.get("lyrics_author", ""),
+                    }
+                    repo.update_lyrics_fields([lyrics_id], patch)
+                return "ok:update_lyrics_fields"
+            if t == "set_primary_lyrics_for_track":
+                track_id = str(payload.get("track_id", "") or "")
+                old_lyrics_id = payload.get("old_lyrics_id")
+                new_lyrics_id = payload.get("new_lyrics_id")
+                old_track_for_new = payload.get("old_track_for_new_lyrics")
+                if track_id:
+                    repo.set_primary_lyrics_for_track(track_id, old_lyrics_id)
+                if new_lyrics_id:
+                    if old_track_for_new and str(old_track_for_new) != track_id:
+                        repo.set_primary_lyrics_for_track(str(old_track_for_new), str(new_lyrics_id))
+                    elif not old_track_for_new:
+                        repo.set_primary_track_for_lyrics(str(new_lyrics_id), None)
+                return "ok:set_primary_lyrics_for_track"
+            if t == "set_primary_track_for_lyrics":
+                lyrics_id = str(payload.get("lyrics_id", "") or "")
+                old_track_id = payload.get("old_track_id")
+                new_track_id = payload.get("new_track_id")
+                old_lyrics_for_new = payload.get("old_lyrics_for_new_track")
+                if lyrics_id:
+                    repo.set_primary_track_for_lyrics(lyrics_id, old_track_id)
+                if new_track_id:
+                    if old_lyrics_for_new and str(old_lyrics_for_new) != lyrics_id:
+                        repo.set_primary_lyrics_for_track(str(new_track_id), str(old_lyrics_for_new))
+                    elif not old_lyrics_for_new:
+                        repo.set_primary_lyrics_for_track(str(new_track_id), None)
+                return "ok:set_primary_track_for_lyrics"
             if t == "create_playlist":
                 repo.delete_playlist(payload.get("playlist_id", ""))
                 return "ok:delete_playlist"
@@ -687,8 +816,18 @@ class MuseArcFacade:
                 LibraryOpsService(repo).delete_tracks(payload.get("track_ids", []), mode=mode)
             elif t == "restore_tracks":
                 LibraryOpsService(repo).restore_tracks(payload.get("track_ids", []))
+            elif t == "delete_lyrics":
+                repo.move_lyrics_to_trash(payload.get("lyrics_ids", []))
+            elif t == "restore_lyrics":
+                repo.restore_lyrics(payload.get("lyrics_ids", []))
             elif t == "update_tracks_fields":
                 repo.update_tracks_fields(payload.get("track_ids", []), payload.get("applied_fields", {}))
+            elif t == "update_lyrics_fields":
+                repo.update_lyrics_fields(payload.get("lyrics_ids", []), payload.get("applied_fields", {}))
+            elif t == "set_primary_lyrics_for_track":
+                repo.set_primary_lyrics_for_track(payload.get("track_id", ""), payload.get("new_lyrics_id"))
+            elif t == "set_primary_track_for_lyrics":
+                repo.set_primary_track_for_lyrics(payload.get("lyrics_id", ""), payload.get("new_track_id"))
             elif t == "create_playlist":
                 repo.create_playlist(payload.get("playlist_id", new_id("pl")), payload.get("name", ""), payload.get("description", ""))
             elif t == "delete_playlist":

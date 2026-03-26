@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -271,9 +272,9 @@ class TrackTableView(QTableView):
         if event.button() == Qt.MouseButton.RightButton:
             self.context_menu_requested.emit(event.globalPosition().toPoint())
         elif event.button() == Qt.MouseButton.LeftButton and self._drag_origin is not None:
-            row = self._row_at_event(event)
-            if row >= 0:
-                self._apply_drag_preview(row)
+            # Selection preview is already applied on press/move; avoid re-applying on release,
+            # otherwise single-click toggle can appear delayed with some event sequences.
+            pass
 
         self._drag_origin = None
         self._drag_preview_base = None

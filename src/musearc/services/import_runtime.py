@@ -11,6 +11,15 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _safe_int(value, default: int = 0) -> int:
+    if isinstance(value, (list, tuple, set, dict)):
+        return default
+    try:
+        return int(value or 0)
+    except Exception:
+        return default
+
+
 class ImportControl:
     def __init__(self):
         self._lock = threading.Lock()
@@ -110,18 +119,18 @@ def load_resume_state(path: Path) -> ResumeState | None:
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     return ResumeState(
-        version=int(payload.get("version", 1)),
+        version=_safe_int(payload.get("version", 1), 1),
         import_batch_id=str(payload["import_batch_id"]),
         source_path=str(payload["source_path"]),
         started_at=str(payload["started_at"]),
-        scanned_files=int(payload.get("scanned_files", 0)),
-        processed_files=int(payload.get("processed_files", 0)),
+        scanned_files=_safe_int(payload.get("scanned_files", 0), 0),
+        processed_files=_safe_int(payload.get("processed_files", 0), 0),
         processed_relpaths=list(payload.get("processed_relpaths", [])),
-        imported_tracks=int(payload.get("imported_tracks", 0)),
-        duplicate_tracks=int(payload.get("duplicate_tracks", 0)),
-        imported_lyrics=int(payload.get("imported_lyrics", 0)),
-        matched_lyrics=int(payload.get("matched_lyrics", 0)),
-        review_items=int(payload.get("review_items", 0)),
+        imported_tracks=_safe_int(payload.get("imported_tracks", 0), 0),
+        duplicate_tracks=_safe_int(payload.get("duplicate_tracks", 0), 0),
+        imported_lyrics=_safe_int(payload.get("imported_lyrics", 0), 0),
+        matched_lyrics=_safe_int(payload.get("matched_lyrics", 0), 0),
+        review_items=_safe_int(payload.get("review_items", 0), 0),
         errors=list(payload.get("errors", [])),
         file_states=list(payload.get("file_states", [])),
         created_track_ids=list(payload.get("created_track_ids", [])),

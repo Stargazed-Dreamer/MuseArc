@@ -489,8 +489,8 @@ class ImportManagementPage(QWidget):
 
     def _on_import_progress(self, payload: dict) -> None:
         self._last_progress_payload = dict(payload)
-        scanned = int(payload.get("scanned_files", 0) or 0)
-        processed = int(payload.get("processed_files", 0) or 0)
+        scanned = _safe_int(payload.get("scanned_files", 0), 0)
+        processed = _safe_int(payload.get("processed_files", 0), 0)
         percent = 0 if scanned <= 0 else int((processed / scanned) * 100)
         self.progress.setValue(max(0, min(100, percent)))
 

@@ -122,6 +122,9 @@ class LibraryOpsService:
     def delete_lyrics(self, lyrics_ids: list[str]) -> list[str]:
         return self.repo.delete_lyrics(lyrics_ids)
 
+    def restore_lyrics(self, lyrics_ids: list[str]) -> int:
+        return self.repo.restore_lyrics(lyrics_ids)
+
     def create_fullscan_work(self, name: str, track_ids: list[str]) -> str:
         work_id = new_id("work")
         self.repo.create_fullscan_work(work_id, name, track_ids)

@@ -32,8 +32,14 @@ class ImportProgressDialog(QDialog):
         root.addLayout(btn_line)
 
     def update_progress(self, payload: dict) -> None:
-        scanned = int(payload.get("scanned_files", 0))
-        processed = int(payload.get("processed_files", 0))
+        try:
+            scanned = int(payload.get("scanned_files", 0) or 0)
+        except Exception:
+            scanned = 0
+        try:
+            processed = int(payload.get("processed_files", 0) or 0)
+        except Exception:
+            processed = 0
         percent = 0 if scanned <= 0 else int((processed / scanned) * 100)
         self.bar.setValue(max(0, min(100, percent)))
 

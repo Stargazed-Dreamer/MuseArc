@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -235,7 +236,7 @@ class ReviewPage(QWidget):
         self.song_tree.setAlternatingRowColors(True)
         self.song_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.song_tree.setRootIsDecorated(True)
-        self.song_tree.setStyleSheet("QTreeWidget::indicator{width:22px;height:22px;}")
+        self.song_tree.setStyleSheet("QTreeWidget::indicator{width:30px;height:30px;}")
         _install_tree_copy_shortcut(self.song_tree)
         root.addWidget(self.song_tree, 1)
 
@@ -248,7 +249,7 @@ class ReviewPage(QWidget):
         self.lyrics_tree.setHeaderLabels(["保留", "歌词文件", "相似度", "说明", "审查ID", ""])
         self.lyrics_tree.setAlternatingRowColors(True)
         self.lyrics_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.lyrics_tree.setStyleSheet("QTreeWidget::indicator{width:22px;height:22px;}")
+        self.lyrics_tree.setStyleSheet("QTreeWidget::indicator{width:30px;height:30px;}")
         _install_tree_copy_shortcut(self.lyrics_tree)
         split.addWidget(self.lyrics_tree)
 
@@ -296,7 +297,7 @@ class ReviewPage(QWidget):
         self.file_tree.setHeaderLabels(["保留", "标题", "来源", "详情", "审查ID"])
         self.file_tree.setAlternatingRowColors(True)
         self.file_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.file_tree.setStyleSheet("QTreeWidget::indicator{width:22px;height:22px;}")
+        self.file_tree.setStyleSheet("QTreeWidget::indicator{width:30px;height:30px;}")
         _install_tree_copy_shortcut(self.file_tree)
         root.addLayout(row)
         root.addWidget(self.file_tree, 1)
@@ -320,7 +321,7 @@ class ReviewPage(QWidget):
         self.other_tree.setHeaderLabels(["保留", "类型", "标题", "数据", "审查ID"])
         self.other_tree.setAlternatingRowColors(True)
         self.other_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.other_tree.setStyleSheet("QTreeWidget::indicator{width:22px;height:22px;}")
+        self.other_tree.setStyleSheet("QTreeWidget::indicator{width:30px;height:30px;}")
         _install_tree_copy_shortcut(self.other_tree)
         root.addLayout(row)
         root.addWidget(self.other_tree, 1)
@@ -364,6 +365,7 @@ class ReviewPage(QWidget):
             payload = row.get("payload") or {}
 
             if kind == "duplicate":
+                review_title = str(row.get("title", "") or "")
                 existing_track_id = str(payload.get("existing_track_id") or "")
                 track_meta = self._track_map.get(existing_track_id) or {}
                 source_path = str(payload.get("path", "") or "")
@@ -380,11 +382,12 @@ class ReviewPage(QWidget):
                         "score": _safe_float(payload.get("score", 0), 0.0),
                         "reason": str(payload.get("reason", "") or "疑似重复音频").replace("原因", ""),
                         "candidate_meta": dict(track_meta),
+                        "restore_track_id": existing_track_id if review_title == "已删除歌曲重新导入" else "",
                     }
                 )
                 continue
 
-            if kind == "file_issue" and str(row.get("title", "") or "") == "指纹提取失败":
+            if kind == "file_issue" and str(row.get("title", "") or "") in {"指纹提取失败", "响度归一不可用"}:
                 source_path = str(payload.get("path", "") or "")
                 source_file = Path(source_path).name
                 title_hint = str(payload.get("title_hint", "") or "")
@@ -430,6 +433,7 @@ class ReviewPage(QWidget):
                 continue
 
             if kind == "lyrics_match":
+                review_title = str(row.get("title", "") or "")
                 source_rel = str(payload.get("lyrics_source", "") or "").replace("\\", "/")
                 suggest_id = str(payload.get("suggest_track_id") or "")
                 suggest_track = self._track_map.get(suggest_id) or {}
@@ -457,6 +461,7 @@ class ReviewPage(QWidget):
                         "imported_at": str(matched.get("imported_at", "") or ""),
                         "source_mtime": source_mtime,
                         "preview": "\n".join(payload.get("lyrics_preview") or []),
+                        "restore_lyrics_id": str(payload.get("lyrics_id", "") or "") if review_title == "已删除歌词重新导入" else "",
                     }
                 )
                 continue
@@ -491,7 +496,7 @@ class ReviewPage(QWidget):
     def _style_group_header(self, item: QTreeWidgetItem) -> None:
         font = item.font(0)
         font.setBold(True)
-        font.setPointSize(max(font.pointSize() + 2, 11))
+        font.setPointSize(max(font.pointSize() + 4, 13))
         item.setFont(0, font)
 
     def _group_parent_of(self, item: QTreeWidgetItem | None) -> QTreeWidgetItem | None:
@@ -1021,6 +1026,7 @@ class ReviewPage(QWidget):
 
     def _save_song_group(self, parent: QTreeWidgetItem) -> None:
         status_by_review: dict[str, bool] = {}
+        restore_track_ids: set[str] = set()
         for child in self._iter_group_leaf_items(parent):
             row = child.data(0, Qt.ItemDataRole.UserRole) or {}
             rid = str(row.get("review_id", "") or "")
@@ -1028,8 +1034,14 @@ class ReviewPage(QWidget):
                 continue
             checked = child.checkState(0) == Qt.CheckState.Checked
             status_by_review[rid] = bool(status_by_review.get(rid, False) or checked)
+            if checked:
+                restore_id = str(row.get("restore_track_id", "") or "")
+                if restore_id:
+                    restore_track_ids.add(restore_id)
         if not status_by_review:
             return
+        if restore_track_ids:
+            self.facade.restore_tracks(sorted(restore_track_ids))
         resolved_ids = [rid for rid, keep in status_by_review.items() if keep]
         ignored_ids = [rid for rid, keep in status_by_review.items() if not keep]
         if resolved_ids:
@@ -1063,6 +1075,7 @@ class ReviewPage(QWidget):
 
     def _save_lyrics_group(self, parent: QTreeWidgetItem) -> None:
         status_by_review: dict[str, bool] = {}
+        restore_lyrics_ids: set[str] = set()
         for child in self._iter_group_leaf_items(parent):
             row = child.data(0, Qt.ItemDataRole.UserRole) or {}
             rid = str(row.get("review_id", "") or "")
@@ -1070,8 +1083,14 @@ class ReviewPage(QWidget):
                 continue
             checked = child.checkState(0) == Qt.CheckState.Checked
             status_by_review[rid] = bool(status_by_review.get(rid, False) or checked)
+            if checked:
+                restore_id = str(row.get("restore_lyrics_id", "") or "")
+                if restore_id:
+                    restore_lyrics_ids.add(restore_id)
         if not status_by_review:
             return
+        if restore_lyrics_ids:
+            self.facade.restore_lyrics(sorted(restore_lyrics_ids))
         resolved_ids = [rid for rid, keep in status_by_review.items() if keep]
         ignored_ids = [rid for rid, keep in status_by_review.items() if not keep]
         if resolved_ids:
