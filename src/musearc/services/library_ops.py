@@ -116,6 +116,9 @@ class LibraryOpsService:
     def update_lyrics_author(self, lyrics_ids: list[str], author: str) -> int:
         return self.repo.update_lyrics_author(lyrics_ids, author)
 
+    def update_lyrics_fields(self, lyrics_ids: list[str], fields: dict[str, object]) -> int:
+        return self.repo.update_lyrics_fields(lyrics_ids, fields)
+
     def delete_lyrics(self, lyrics_ids: list[str]) -> list[str]:
         return self.repo.delete_lyrics(lyrics_ids)
 

@@ -345,6 +345,26 @@ class LibraryRepository:
         ).fetchall()
         return self._enrich_track_rows(rows)
 
+    def get_track_by_source_sha(self, source_sha256: str) -> dict | None:
+        key = str(source_sha256 or "").strip()
+        if not key:
+            return None
+        row = self.conn.execute(
+            """
+            SELECT track_id, file_name, title, artist, album, language_kind,
+                   storage_relpath, source_relpath, source_fullpath, source_sha256,
+                   source_ext, storage_format, imported_at, updated_at, deleted_at, ext_json
+            FROM tracks
+            WHERE source_sha256 = ?
+            LIMIT 1
+            """,
+            (key,),
+        ).fetchone()
+        if not row:
+            return None
+        enriched = self._enrich_track_rows([row])
+        return enriched[0] if enriched else None
+
     def update_tracks_fields(self, track_ids: Iterable[str], fields: dict[str, object]) -> int:
         ids = [track_id for track_id in track_ids if track_id]
         if not ids or not fields:
@@ -358,7 +378,30 @@ class LibraryRepository:
             "language_kind",
             "preference_level",
         }
-        patch = {k: v for k, v in fields.items() if k in allowed}
+        patch_raw = {k: v for k, v in fields.items() if k in allowed}
+        patch: dict[str, object] = {}
+        for key, value in patch_raw.items():
+            if key == "preference_level":
+                try:
+                    parsed = int(value)
+                except Exception:
+                    if isinstance(value, (list, tuple)) and value:
+                        try:
+                            parsed = int(value[0])
+                        except Exception:
+                            continue
+                    else:
+                        continue
+                patch[key] = max(1, min(10, parsed))
+                continue
+
+            if isinstance(value, (list, tuple)):
+                value = value[0] if value else ""
+            elif isinstance(value, set):
+                value = next(iter(value)) if value else ""
+            elif isinstance(value, dict):
+                value = ""
+            patch[key] = str(value or "").strip()
         if not patch:
             return 0
 
@@ -379,6 +422,23 @@ class LibraryRepository:
     def get_lyrics_id_by_hash(self, text_hash: str) -> str | None:
         row = self.conn.execute("SELECT lyrics_id FROM lyrics WHERE text_hash = ?", (text_hash,)).fetchone()
         return row[0] if row else None
+
+    def get_lyrics_by_text_hash(self, text_hash: str) -> dict | None:
+        key = str(text_hash or "").strip()
+        if not key:
+            return None
+        row = self.conn.execute(
+            """
+            SELECT lyrics_id, source_relpath, storage_relpath, text_hash, raw_encoding,
+                   lyrics_title, lyrics_artist, lyrics_album, lyrics_author, line_count,
+                   imported_at, deleted_at, ext_json
+            FROM lyrics
+            WHERE text_hash = ?
+            LIMIT 1
+            """,
+            (key,),
+        ).fetchone()
+        return dict(row) if row else None
 
     def insert_lyrics(self, item: LyricsInsert) -> str:
         existing = self.get_lyrics_id_by_hash(item.text_hash)
@@ -531,6 +591,30 @@ class LibraryRepository:
         )
         return int(cursor.rowcount or 0)
 
+    def update_lyrics_fields(self, lyrics_ids: Iterable[str], fields: dict[str, object]) -> int:
+        ids = [v for v in lyrics_ids if v]
+        if not ids or not fields:
+            return 0
+
+        allowed = {"file_name", "lyrics_title", "lyrics_artist", "lyrics_album", "lyrics_author"}
+        patch = {k: v for k, v in fields.items() if k in allowed}
+        if not patch:
+            return 0
+
+        set_items = [f"{k} = ?" for k in patch.keys()]
+        placeholders = _placeholders(len(ids))
+        params = [*patch.values(), *ids]
+        cursor = self.conn.execute(
+            f"""
+            UPDATE lyrics
+            SET {", ".join(set_items)}
+            WHERE lyrics_id IN ({placeholders})
+              AND deleted_at IS NULL
+            """,
+            tuple(params),
+        )
+        return int(cursor.rowcount or 0)
+
     def delete_lyrics(self, lyrics_ids: Iterable[str]) -> list[str]:
         ids = [v for v in lyrics_ids if v]
         if not ids:
@@ -542,13 +626,10 @@ class LibraryRepository:
         ).fetchall()
         if not rows:
             return []
+        now = _utc_now_iso()
         self.conn.execute(
-            f"DELETE FROM track_lyrics WHERE lyrics_id IN ({placeholders})",
-            tuple(ids),
-        )
-        self.conn.execute(
-            f"DELETE FROM lyrics WHERE lyrics_id IN ({placeholders})",
-            tuple(ids),
+            f"UPDATE lyrics SET deleted_at = ? WHERE lyrics_id IN ({placeholders})",
+            tuple([now, *ids]),
         )
         return [str(r["storage_relpath"] or "") for r in rows if str(r["storage_relpath"] or "")]
 
@@ -685,6 +766,34 @@ class LibraryRepository:
             WHERE review_id IN ({placeholders}) AND status = 'pending'
             """,
             tuple([final_status, _utc_now_iso(), *ids]),
+        )
+        return int(cursor.rowcount or 0)
+
+    def set_reviews_status(self, review_ids: Iterable[str], status: str) -> int:
+        ids = [rid for rid in review_ids if rid]
+        if not ids:
+            return 0
+        final_status = str(status or "pending")
+        placeholders = _placeholders(len(ids))
+        if final_status == "pending":
+            cursor = self.conn.execute(
+                f"""
+                UPDATE review_queue
+                SET status = 'pending', resolved_at = NULL
+                WHERE review_id IN ({placeholders})
+                """,
+                tuple(ids),
+            )
+            return int(cursor.rowcount or 0)
+
+        resolved_at = _utc_now_iso()
+        cursor = self.conn.execute(
+            f"""
+            UPDATE review_queue
+            SET status = ?, resolved_at = ?
+            WHERE review_id IN ({placeholders})
+            """,
+            tuple([final_status, resolved_at, *ids]),
         )
         return int(cursor.rowcount or 0)
 

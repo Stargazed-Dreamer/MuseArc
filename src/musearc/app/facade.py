@@ -132,10 +132,27 @@ class MuseArcFacade:
             return LibraryOpsService(LibraryRepository(conn)).pending_reviews(limit)
 
     def resolve_reviews(self, review_ids: list[str], status: str = "resolved") -> int:
+        ids = [rid for rid in review_ids if rid]
+        if not ids:
+            return 0
         with self.ctx.db.session() as conn:
             from musearc.infra.db.repositories import LibraryRepository
 
-            count = LibraryOpsService(LibraryRepository(conn)).resolve_reviews(review_ids, status=status)
+            repo = LibraryRepository(conn)
+            pending_map = {str(r.get("review_id", "")): r for r in repo.list_pending_reviews(limit=200_000)}
+            target_ids = [rid for rid in ids if rid in pending_map]
+            if not target_ids:
+                return 0
+            count = LibraryOpsService(repo).resolve_reviews(target_ids, status=status)
+            if count > 0:
+                self._append_undo(
+                    repo,
+                    "resolve_reviews",
+                    {
+                        "review_ids": target_ids,
+                        "status_after": "ignored" if status == "ignored" else "resolved",
+                    },
+                )
         if count > 0:
             self._redo_actions.clear()
             self._log(f"resolve_reviews count={count} status={status}")
@@ -441,6 +458,16 @@ class MuseArcFacade:
             self._log(f"update_lyrics_author count={count}")
         return count
 
+    def update_lyrics_fields(self, lyrics_ids: list[str], fields: dict[str, object]) -> int:
+        with self.ctx.db.session() as conn:
+            from musearc.infra.db.repositories import LibraryRepository
+
+            count = LibraryOpsService(LibraryRepository(conn)).update_lyrics_fields(lyrics_ids, fields)
+        if count > 0:
+            self._redo_actions.clear()
+            self._log(f"update_lyrics_fields count={count} fields={list(fields.keys())}")
+        return count
+
     def delete_lyrics(self, lyrics_ids: list[str]) -> int:
         with self.ctx.db.session() as conn:
             from musearc.infra.db.repositories import LibraryRepository
@@ -453,7 +480,7 @@ class MuseArcFacade:
                 pass
         if relpaths:
             self._redo_actions.clear()
-            self._log(f"delete_lyrics count={len(relpaths)}")
+            self._log(f"move_lyrics_to_trash count={len(relpaths)}")
         return len(relpaths)
 
     def read_logs(self) -> list[dict]:
@@ -636,6 +663,9 @@ class MuseArcFacade:
             if t == "create_fullscan_work":
                 repo.delete_fullscan_work(payload.get("work_id", ""))
                 return "ok:delete_fullscan_work"
+            if t == "resolve_reviews":
+                repo.set_reviews_status(payload.get("review_ids", []), "pending")
+                return "ok:restore_reviews_pending"
 
             return f"unsupported:{t}"
 
@@ -679,6 +709,8 @@ class MuseArcFacade:
                     payload.get("name", ""),
                     payload.get("track_ids", []),
                 )
+            elif t == "resolve_reviews":
+                repo.set_reviews_status(payload.get("review_ids", []), payload.get("status_after", "resolved"))
             else:
                 self._redo_actions.append(action)
                 return f"unsupported_redo:{t}"

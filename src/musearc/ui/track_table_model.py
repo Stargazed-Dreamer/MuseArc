@@ -9,6 +9,24 @@ from PySide6.QtGui import QColor, QFont
 from musearc.core.pinyin import first_letter
 
 
+def _safe_int_value(value, default: int = 0) -> int:
+    if isinstance(value, (list, tuple, dict, set)):
+        return default
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _safe_bool(value) -> bool:
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(len(value))
+    try:
+        return bool(int(value))
+    except Exception:
+        return bool(value)
+
+
 def format_mmss(value) -> str:
     try:
         sec = int(float(value))
@@ -154,7 +172,7 @@ class TrackTableModel(QAbstractTableModel):
                 is_favorite = bool(track.get("is_favorite"))
                 heart = "♥" if is_favorite else ""
                 if self.custom_order_enabled and bool(track.get("_entry_editable")):
-                    order_value = int(track.get("entry", 0) or 0)
+                    order_value = _safe_int_value(track.get("entry", 0), 0)
                     return f"{heart} {order_value}" if heart else f"  {order_value}"
                 return heart
 
@@ -243,11 +261,11 @@ class TrackTableModel(QAbstractTableModel):
                     return False
 
         if key == "custom_order":
-            if int(track.get("entry", 0) or 0) == int(parsed):
+            if _safe_int_value(track.get("entry", 0), 0) == _safe_int_value(parsed, 0):
                 return False
-            track["entry"] = int(parsed)
+            track["entry"] = _safe_int_value(parsed, 0)
             emit_key = "custom_order"
-            emit_value = int(parsed)
+            emit_value = _safe_int_value(parsed, 0)
         elif key.startswith("tag:"):
             if str(old_value) == str(parsed):
                 return False
@@ -291,7 +309,7 @@ class TrackTableModel(QAbstractTableModel):
             except Exception:
                 item["entry"] = 0
             item["_entry_editable"] = bool(item.get("_entry_editable", False))
-            item["is_favorite"] = bool(int(item.get("is_favorite", 0) or 0))
+            item["is_favorite"] = _safe_bool(item.get("is_favorite", 0))
             item["format"] = (
                 str(item.get("format") or item.get("storage_format") or item.get("source_ext") or "")
                 .replace(".", "")
@@ -428,7 +446,7 @@ class TrackTableModel(QAbstractTableModel):
     def _group_key_label(self, row: dict, key: str) -> tuple[str, str]:
         if key == "custom_order":
             if self.custom_order_enabled:
-                value = int(row.get("entry", 0) or 0)
+                value = _safe_int_value(row.get("entry", 0), 0)
                 return f"entry:{value}", f"排序 {value}"
             fav = bool(row.get("is_favorite"))
             return ("fav:1", "已收藏") if fav else ("fav:0", "未收藏")
@@ -492,7 +510,7 @@ class TrackTableModel(QAbstractTableModel):
     def _value_for_key(self, track: dict, key: str):
         if key == "custom_order":
             if self.custom_order_enabled:
-                return int(track.get("entry", 0) or 0)
+                return _safe_int_value(track.get("entry", 0), 0)
             return 1 if bool(track.get("is_favorite")) else 0
         if key == "duration_mmss":
             return track.get("duration_mmss", format_mmss(track.get("duration_sec", 0)))

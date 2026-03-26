@@ -75,6 +75,15 @@ def _errors_count(value) -> int:
         return 0
 
 
+def _safe_int(value, default: int = 0) -> int:
+    if isinstance(value, (list, tuple, dict, set)):
+        return default
+    try:
+        return int(value or 0)
+    except Exception:
+        return default
+
+
 def _clean_status_text(value: str) -> str:
     text = str(value or "").strip()
     if not text:
@@ -191,12 +200,12 @@ class ImportTaskDetailDialog(QDialog):
     def set_payload(self, payload: dict, *, running: bool) -> None:
         batch_id = str(payload.get("import_batch_id", "") or "-")
         source_path = str(payload.get("source_path", "") or "-")
-        scanned = int(payload.get("scanned_files", 0) or 0)
-        processed = int(payload.get("processed_files", 0) or 0)
-        imported_tracks = int(payload.get("imported_tracks", 0) or 0)
-        imported_lyrics = int(payload.get("imported_lyrics", 0) or 0)
-        duplicate_tracks = int(payload.get("duplicate_tracks", 0) or 0)
-        review_items = int(payload.get("review_items", 0) or 0)
+        scanned = _safe_int(payload.get("scanned_files", 0), 0)
+        processed = _safe_int(payload.get("processed_files", 0), 0)
+        imported_tracks = _safe_int(payload.get("imported_tracks", 0), 0)
+        imported_lyrics = _safe_int(payload.get("imported_lyrics", 0), 0)
+        duplicate_tracks = _safe_int(payload.get("duplicate_tracks", 0), 0)
+        review_items = _safe_int(payload.get("review_items", 0), 0)
         errors = _errors_count(payload.get("errors", 0))
 
         if not running and processed <= 0:

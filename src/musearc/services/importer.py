@@ -696,7 +696,38 @@ class ImportService:
                 continue
 
             if _is_placeholder_empty_lyrics(text):
-                set_skipped(relpath, "纯音乐占位歌词")
+                set_processing(relpath, "纯音乐占位匹配")
+                emit("lyrics_match", relpath)
+                matched_track_id = ""
+                try:
+                    match = self.lyrics_matcher.match_one(candidate.stem_normalized, "", batch_track_records)
+                    matched_track_id = str(match.track_id or "")
+                except Exception:
+                    matched_track_id = ""
+                if matched_track_id:
+                    try:
+                        repo.update_tracks_fields([matched_track_id], {"language_kind": "instrumental"})
+                    except Exception:
+                        pass
+                    set_skipped(relpath, "纯音乐占位歌词")
+                else:
+                    state.review_items += 1
+                    self._enqueue_review(
+                        repo,
+                        ReviewItem(
+                            kind=ReviewKind.LYRICS_MATCH,
+                            title="纯音乐占位歌词未匹配歌曲",
+                            payload={
+                                "lyrics_source": relpath,
+                                "reason": "纯音乐占位歌词无法自动匹配到歌曲",
+                                "lyrics_preview": text.splitlines()[:10],
+                                "group_key": f"inst_{candidate.path.stem}",
+                                "lyrics_group_key": f"inst_{candidate.path.stem}",
+                            },
+                            priority=2,
+                        ),
+                    )
+                    set_review(relpath, "纯音乐占位歌词未匹配歌曲")
                 mark_processed(relpath)
                 continue
 
@@ -786,6 +817,7 @@ class ImportService:
                             title="歌词匹配待人工审查",
                             payload={
                                 "lyrics_source": relpath,
+                                "lyrics_id": lyrics_id,
                                 "suggest_track_id": match.track_id,
                                 "score": match.score,
                                 "reason": match.reason,
