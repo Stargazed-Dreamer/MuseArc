@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import subprocess
+
+import av
 
 from .commands import MediaCommandError
-from .ffmpeg_tools import ffmpeg_path
 
 
 @dataclass(slots=True)
@@ -15,47 +15,86 @@ class ExportFormat:
     sample_rate: int | None = None
 
 
+def _parse_bitrate(value: str | None, default_value: int | None = None) -> int | None:
+    if not value:
+        return default_value
+    text = value.strip().lower()
+    try:
+        if text.endswith("k"):
+            return int(float(text[:-1]) * 1000)
+        if text.endswith("m"):
+            return int(float(text[:-1]) * 1_000_000)
+        return int(text)
+    except ValueError:
+        return default_value
+
+
+def _iter_frames(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
 class MediaTranscoder:
     def transcode_to_opus(self, source: Path, target: Path) -> None:
-        self.export_audio(source, target, ExportFormat(fmt="opus", bitrate="160k", sample_rate=48000))
+        self.export_audio(
+            source,
+            target,
+            ExportFormat(fmt="opus", bitrate="160k", sample_rate=48000),
+        )
 
     def export_audio(self, source: Path, target: Path, options: ExportFormat) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
-        fmt = str(options.fmt or "").lower().strip(".")
+        fmt = options.fmt.lower().strip(".")
         codec = self._codec_for_format(fmt)
 
-        cmd = [
-            str(ffmpeg_path()),
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-y",
-            "-i",
-            str(source),
-            "-map_metadata",
-            "0",
-            "-vn",
-            "-c:a",
-            codec,
-        ]
-
-        bitrate = str(options.bitrate or "").strip()
-        if not bitrate and fmt == "opus":
-            bitrate = "160k"
-        if bitrate:
-            cmd.extend(["-b:a", bitrate])
-        if options.sample_rate:
-            cmd.extend(["-ar", str(int(options.sample_rate))])
-        cmd.append(str(target))
-
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        except Exception as exc:
+            with av.open(str(source)) as in_container, av.open(str(target), mode="w") as out_container:
+                in_stream = None
+                for stream in in_container.streams:
+                    if stream.type == "audio":
+                        in_stream = stream
+                        break
+                if in_stream is None:
+                    raise MediaCommandError("no_audio_stream")
+
+                input_rate = in_stream.codec_context.sample_rate or 48000
+                output_rate = options.sample_rate or input_rate
+                channels = in_stream.codec_context.channels or 2
+                output_layout = "stereo" if channels >= 2 else "mono"
+
+                out_stream = out_container.add_stream(codec, rate=output_rate)
+                out_stream.layout = output_layout
+
+                bit_rate = _parse_bitrate(options.bitrate)
+                if bit_rate:
+                    out_stream.codec_context.bit_rate = bit_rate
+                elif fmt == "opus":
+                    out_stream.codec_context.bit_rate = 160_000
+
+                out_container.metadata.update(in_container.metadata or {})
+
+                resampler = av.AudioResampler(format="fltp", layout=output_layout, rate=output_rate)
+
+                for frame in in_container.decode(in_stream):
+                    frame.pts = None
+                    for resampled in _iter_frames(resampler.resample(frame)):
+                        resampled.pts = None
+                        for packet in out_stream.encode(resampled):
+                            out_container.mux(packet)
+
+                for resampled in _iter_frames(resampler.resample(None)):
+                    for packet in out_stream.encode(resampled):
+                        out_container.mux(packet)
+
+                for packet in out_stream.encode(None):
+                    out_container.mux(packet)
+        except MediaCommandError:
+            raise
+        except Exception as exc:  # pragma: no cover - backend specific
             raise MediaCommandError(f"transcode_failed:{source}:{exc}") from exc
-        if proc.returncode != 0 or not target.exists():
-            err = (proc.stderr or proc.stdout or "").strip()
-            raise MediaCommandError(f"transcode_failed:{source}:{err or 'ffmpeg_return_nonzero'}")
 
     @staticmethod
     def _codec_for_format(fmt: str) -> str:

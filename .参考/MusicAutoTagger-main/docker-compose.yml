@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  music-tagger:
+    build: .
+    container_name: music-tagger
+    restart: unless-stopped
+    
+    # 环境变量
+    environment:
+      - JAVA_OPTS=-Xmx512m -Xms256m
+      - TZ=Asia/Shanghai
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - UMASK=${UMASK:-022}
+    
+    # volumes (adjust host paths as needed)
+    volumes:
+      # monitored input directory
+      - /share/Download/Music:/music
+      # output directory for processed files
+      - /share/Music:/app/tagged_music
+      # admin credentials data (persisted)
+      - ./data:/app/data
+      # config file (optional, auto-generated)
+      - ./config.properties:/app/config.properties
+      # logs (optional)
+      - ./logs:/app/logs
+      # cover cache (optional)
+      - ./cover_cache:/app/.cover_cache
+
+    network_mode: bridge
+    
+    # 资源限制（适配QNAP硬件）
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    
+    # 日志配置（防止日志文件过大）
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # 健康检查（可选）
+    healthcheck:
+      test: ["CMD", "sh", "-c", "ps aux | grep -v grep | grep java || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+# 如果需要与其他容器通信，可以取消注释以下网络配置
+# networks:
+#   music-network:
+#     driver: bridge

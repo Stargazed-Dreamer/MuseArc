@@ -2,8 +2,9 @@
 
 from collections import defaultdict
 from collections.abc import Callable
+import re
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 
 from musearc.core.pinyin import first_letter
@@ -54,6 +55,32 @@ def _path_parent_label(path_text: str) -> str:
     return parts[0] if parts else "(空)"
 
 
+def _first_non_space_char(text: str) -> str:
+    for ch in str(text or ""):
+        if not ch.isspace():
+            return ch
+    return ""
+
+
+def _char_lang_bucket(ch: str) -> tuple[str, str]:
+    if not ch:
+        return "other", "(空)"
+    code = ord(ch)
+    if "A" <= ch <= "Z" or "a" <= ch <= "z":
+        return "en", ch.lower()
+    if 0x4E00 <= code <= 0x9FFF:
+        return "zh", ch
+    return "other", ch.lower()
+
+
+def _lyrics_stem_label(text: str) -> str:
+    stem = basename(str(text or ""))
+    if "." in stem:
+        stem = stem.rsplit(".", 1)[0]
+    stem = re.sub(r"[\s._-]+", " ", stem).strip()
+    return stem
+
+
 def _marker_for_state(state: str) -> str:
     if state == "asc":
         return "↑"
@@ -94,6 +121,7 @@ class TrackTableModel(QAbstractTableModel):
         self.confirm_empty_edit_callback: Callable[[str, str], bool] | None = None
         self.tag_fields: list[str] = []
         self.columns: list[tuple[str, str, bool]] = list(self.BASE_COLUMNS)
+        self._rebuild_pending = False
 
     def set_tag_fields(self, tag_fields: list[str]) -> None:
         unique: list[str] = []
@@ -286,7 +314,7 @@ class TrackTableModel(QAbstractTableModel):
             emit_key = key
             emit_value = parsed
 
-        self._rebuild_display()
+        self._schedule_rebuild()
         if track_id:
             self.track_field_edited.emit(track_id, emit_key, emit_value)
         return True
@@ -385,7 +413,17 @@ class TrackTableModel(QAbstractTableModel):
             track[key] = text
             changed = True
         if changed:
-            self._rebuild_display()
+            self._schedule_rebuild()
+
+    def _schedule_rebuild(self) -> None:
+        if self._rebuild_pending:
+            return
+        self._rebuild_pending = True
+        QTimer.singleShot(0, self._flush_rebuild)
+
+    def _flush_rebuild(self) -> None:
+        self._rebuild_pending = False
+        self._rebuild_display()
 
     def _sort_tracks(self, rows: list[dict]) -> list[dict]:
         items = list(rows)
@@ -451,24 +489,36 @@ class TrackTableModel(QAbstractTableModel):
             fav = bool(row.get("is_favorite"))
             return ("fav:1", "已收藏") if fav else ("fav:0", "未收藏")
 
-        if key == "duration_sec":
+        if key in {"duration_sec", "duration_mmss"}:
             sec = float(row.get("duration_sec", 0) or 0)
-            if sec < 10:
+            if sec <= 10:
                 return "dur:0-10", "<10s"
-            if sec < 60:
+            if sec <= 60:
                 return "dur:10-60", "10s~1min"
-            if sec < 300:
+            if sec <= 300:
                 return "dur:1-5", "1~5min"
-            if sec < 600:
+            if sec <= 600:
                 return "dur:5-10", "5~10min"
             if sec < 1800:
                 return "dur:10-30", "10~30min"
             return "dur:30+", "30min+"
 
-        if key in {"file_name", "title"}:
+        if key == "title":
             lang = str(row.get("language_kind") or "unknown")
             initial = first_letter(str(row.get(key) or ""))
             return f"name:{lang}:{initial}", f"{lang}/{initial}"
+
+        if key == "file_name":
+            first = _first_non_space_char(str(row.get("file_name") or ""))
+            lang, bucket = _char_lang_bucket(first)
+            lang_label = "中文" if lang == "zh" else "英语" if lang == "en" else "其它"
+            return f"name_file:{lang}:{bucket}", f"{lang_label}/{bucket or '(空)'}"
+
+        if key == "lyrics_file_name":
+            first = _first_non_space_char(_lyrics_stem_label(str(row.get("lyrics_file_name") or "")))
+            lang, bucket = _char_lang_bucket(first)
+            lang_label = "中文" if lang == "zh" else "英语" if lang == "en" else "其它"
+            return f"name_lyrics:{lang}:{bucket}", f"{lang_label}/{bucket or '(空)'}"
 
         if key == "preference_level":
             try:

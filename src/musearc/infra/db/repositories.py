@@ -287,6 +287,9 @@ class LibraryRepository:
     def insert_track(self, item: TrackInsert) -> None:
         data = asdict(item)
         imported_at = data.pop("imported_at").isoformat()
+        ext_payload = data.pop("ext_json", {})
+        if not isinstance(ext_payload, dict):
+            ext_payload = {}
         values = (
             data["track_id"],
             data["file_name"],
@@ -314,6 +317,7 @@ class LibraryRepository:
             data["fingerprint_payload"],
             imported_at,
             imported_at,
+            json.dumps(ext_payload, ensure_ascii=False),
         )
         self.conn.execute(
             """
@@ -322,9 +326,9 @@ class LibraryRepository:
               kind, duration_sec, sample_rate, channels, bit_rate, quality_score,
               storage_relpath, source_relpath, source_fullpath, source_sha256, source_ext,
               probe_codec, file_health, fingerprint_version, fingerprint_digest,
-              fingerprint_payload, imported_at, updated_at
+              fingerprint_payload, imported_at, updated_at, ext_json
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             values,
         )
@@ -419,6 +423,17 @@ class LibraryRepository:
             tuple(params),
         )
         return cursor.rowcount
+
+    def update_track_ext_json(self, track_id: str, payload: dict) -> int:
+        tid = str(track_id or "").strip()
+        if not tid:
+            return 0
+        data = payload if isinstance(payload, dict) else {}
+        cursor = self.conn.execute(
+            "UPDATE tracks SET ext_json = ?, updated_at = ? WHERE track_id = ?",
+            (json.dumps(data, ensure_ascii=False), _utc_now_iso(), tid),
+        )
+        return int(cursor.rowcount or 0)
 
     def get_lyrics_id_by_hash(self, text_hash: str) -> str | None:
         row = self.conn.execute("SELECT lyrics_id FROM lyrics WHERE text_hash = ?", (text_hash,)).fetchone()

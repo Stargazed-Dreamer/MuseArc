@@ -10,9 +10,12 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
+    QFrame,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -20,8 +23,10 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSlider,
     QSplitter,
+    QSpinBox,
     QTabWidget,
     QTableView,
     QTreeWidget,
@@ -82,8 +87,53 @@ def _track_label(track: dict) -> str:
 def _canonical_lyrics_name(file_name: str) -> str:
     stem = Path(str(file_name or "")).stem.casefold().strip()
     stem = re.sub(r"[\s._-]+", " ", stem)
-    stem = re.sub(r"\s*[\(\[（]\s*\d+\s*[\)\]）]\s*$", "", stem)
+    stem = re.sub(r"\s*[\(\[（【].*?[\)\]）】]\s*$", "", stem)
     return stem.strip()
+
+
+def _lyrics_file_bracket_count(file_name: str) -> int:
+    stem = Path(str(file_name or "")).stem
+    return len(re.findall(r"[\(\[（【].*?[\)\]）】]", stem))
+
+
+def _derive_lyrics_group_title(group_key: str, source_rel: str) -> str:
+    key = str(group_key or "").strip()
+    if key and not key.startswith("lyr_grp_"):
+        return key
+    stem = Path(str(source_rel or "")).stem.strip()
+    if not stem:
+        return key or "未分组"
+    cleaned = re.sub(r"\s*[\(\[（【].*?[\)\]）】]\s*$", "", stem).strip()
+    return cleaned or stem
+
+
+def _derive_song_group_title(group_key: str, source_path: str) -> str:
+    key = str(group_key or "").strip()
+    stem = Path(str(source_path or "")).stem.strip()
+    if key and len(key) > 6 and not re.fullmatch(r"[0-9a-fA-F_]+", key):
+        return key
+    if stem:
+        cleaned = re.sub(r"\s*[\(\[（【].*?[\)\]）】]\s*$", "", stem).strip()
+        return cleaned or stem
+    return key or "未分组"
+
+
+class _ClickableFrame(QFrame):
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class _ClickableLabel(QLabel):
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class _TrackPickerDialog(QDialog):
@@ -190,8 +240,8 @@ class ReviewPage(QWidget):
         self._button_scale = 1.0
         self._static_buttons: list[QPushButton] = []
         self._dynamic_buttons: list[QPushButton] = []
-        self._song_group_controls: dict[int, dict] = {}
-        self._lyrics_group_controls: dict[int, dict] = {}
+        self._song_group_controls: dict[str, dict] = {}
+        self._lyrics_group_controls: dict[str, dict] = {}
 
         root = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -231,27 +281,28 @@ class ReviewPage(QWidget):
 
     def _build_song_tab(self) -> None:
         root = QVBoxLayout(self.song_tab)
-        self.song_tree = QTreeWidget()
-        self.song_tree.setHeaderLabels(["保留", "播放", "源文件", "候选歌曲", "相似度", "说明", "审查ID"])
-        self.song_tree.setAlternatingRowColors(True)
-        self.song_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.song_tree.setRootIsDecorated(True)
-        self.song_tree.setStyleSheet("QTreeWidget::indicator{width:30px;height:30px;}")
-        _install_tree_copy_shortcut(self.song_tree)
-        root.addWidget(self.song_tree, 1)
-
-        self.song_tree.itemClicked.connect(self._on_song_item_clicked)
+        self.song_scroll = QScrollArea()
+        self.song_scroll.setWidgetResizable(True)
+        self.song_groups_host = QWidget()
+        self.song_groups_layout = QVBoxLayout(self.song_groups_host)
+        self.song_groups_layout.setContentsMargins(8, 8, 8, 8)
+        self.song_groups_layout.setSpacing(12)
+        self.song_groups_layout.addStretch(1)
+        self.song_scroll.setWidget(self.song_groups_host)
+        root.addWidget(self.song_scroll, 1)
 
     def _build_lyrics_tab(self) -> None:
         root = QVBoxLayout(self.lyrics_tab)
         split = QSplitter(Qt.Orientation.Horizontal)
-        self.lyrics_tree = QTreeWidget()
-        self.lyrics_tree.setHeaderLabels(["保留", "歌词文件", "相似度", "说明", "审查ID", ""])
-        self.lyrics_tree.setAlternatingRowColors(True)
-        self.lyrics_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.lyrics_tree.setStyleSheet("QTreeWidget::indicator{width:30px;height:30px;}")
-        _install_tree_copy_shortcut(self.lyrics_tree)
-        split.addWidget(self.lyrics_tree)
+        self.lyrics_scroll = QScrollArea()
+        self.lyrics_scroll.setWidgetResizable(True)
+        self.lyrics_groups_host = QWidget()
+        self.lyrics_groups_layout = QVBoxLayout(self.lyrics_groups_host)
+        self.lyrics_groups_layout.setContentsMargins(8, 8, 8, 8)
+        self.lyrics_groups_layout.setSpacing(12)
+        self.lyrics_groups_layout.addStretch(1)
+        self.lyrics_scroll.setWidget(self.lyrics_groups_host)
+        split.addWidget(self.lyrics_scroll)
 
         preview_host = QWidget()
         preview_layout = QVBoxLayout(preview_host)
@@ -277,17 +328,19 @@ class ReviewPage(QWidget):
         self.preview_right.verticalScrollBar().valueChanged.connect(
             lambda v: self._sync_preview_scrollbars(from_left=False, value=v)
         )
-        self.lyrics_tree.itemClicked.connect(self._on_lyrics_item_clicked)
 
     def _build_file_tab(self) -> None:
         root = QVBoxLayout(self.file_tab)
         row = QHBoxLayout()
+        self.btn_file_invert = QPushButton("反选")
         self.btn_file_retry = QPushButton("重试导入选中路径")
         self.btn_file_save = QPushButton("保存勾选的文件")
         self.btn_file_ignore = QPushButton("忽略勾选")
+        self._register_static_button(self.btn_file_invert)
         self._register_static_button(self.btn_file_retry)
         self._register_static_button(self.btn_file_save)
         self._register_static_button(self.btn_file_ignore)
+        row.addWidget(self.btn_file_invert)
         row.addWidget(self.btn_file_retry)
         row.addWidget(self.btn_file_save)
         row.addWidget(self.btn_file_ignore)
@@ -302,6 +355,7 @@ class ReviewPage(QWidget):
         root.addLayout(row)
         root.addWidget(self.file_tree, 1)
 
+        self.btn_file_invert.clicked.connect(lambda: self._invert_check_state_tree(self.file_tree))
         self.btn_file_retry.clicked.connect(self._retry_selected_file_issues)
         self.btn_file_save.clicked.connect(lambda: self._resolve_checked_items(self.file_tree, "resolved"))
         self.btn_file_ignore.clicked.connect(lambda: self._resolve_checked_items(self.file_tree, "ignored"))
@@ -309,10 +363,13 @@ class ReviewPage(QWidget):
     def _build_other_tab(self) -> None:
         root = QVBoxLayout(self.other_tab)
         row = QHBoxLayout()
+        self.btn_other_invert = QPushButton("反选")
         self.btn_other_save = QPushButton("保存勾选的文件")
         self.btn_other_ignore = QPushButton("忽略勾选")
+        self._register_static_button(self.btn_other_invert)
         self._register_static_button(self.btn_other_save)
         self._register_static_button(self.btn_other_ignore)
+        row.addWidget(self.btn_other_invert)
         row.addWidget(self.btn_other_save)
         row.addWidget(self.btn_other_ignore)
         row.addStretch(1)
@@ -326,6 +383,7 @@ class ReviewPage(QWidget):
         root.addLayout(row)
         root.addWidget(self.other_tree, 1)
 
+        self.btn_other_invert.clicked.connect(lambda: self._invert_check_state_tree(self.other_tree))
         self.btn_other_save.clicked.connect(lambda: self._resolve_checked_items(self.other_tree, "resolved"))
         self.btn_other_ignore.clicked.connect(lambda: self._resolve_checked_items(self.other_tree, "ignored"))
 
@@ -373,16 +431,22 @@ class ReviewPage(QWidget):
                     {
                         "review_id": review_id,
                         "group_key": str(payload.get("group_key") or existing_track_id[:8] or Path(source_path).stem or "未分组"),
+                        "group_title": _derive_song_group_title(
+                            str(payload.get("group_key") or existing_track_id[:8] or ""),
+                            source_path,
+                        ),
                         "source_file": Path(source_path).name,
                         "source_path": source_path,
                         "candidate_track_id": existing_track_id,
                         "candidate_track": _track_label(track_meta) if track_meta else existing_track_id,
+                        "candidate_file_name": str(track_meta.get("file_name", "") or ""),
                         "candidate_path": str(track_meta.get("source_fullpath", "") or ""),
                         "candidate_duration_sec": _safe_float(track_meta.get("duration_sec", 0), 0),
                         "score": _safe_float(payload.get("score", 0), 0.0),
                         "reason": str(payload.get("reason", "") or "疑似重复音频").replace("原因", ""),
                         "candidate_meta": dict(track_meta),
                         "restore_track_id": existing_track_id if review_title == "已删除歌曲重新导入" else "",
+                        "deferred_import": bool(payload.get("deferred_import", False)),
                     }
                 )
                 continue
@@ -403,10 +467,12 @@ class ReviewPage(QWidget):
                             {
                                 "review_id": review_id,
                                 "group_key": group_key,
+                                "group_title": _derive_song_group_title(group_key, source_path),
                                 "source_file": source_file,
                                 "source_path": source_path,
                                 "candidate_track_id": tid,
                                 "candidate_track": _track_label(track_meta) if track_meta else str(sug.get("title", "") or tid),
+                                "candidate_file_name": str(track_meta.get("file_name", "") or ""),
                                 "candidate_path": str(track_meta.get("source_fullpath", "") or ""),
                                 "candidate_duration_sec": _safe_float(track_meta.get("duration_sec", 0), 0),
                                 "score": _safe_float(sug.get("score", 0), 0.0),
@@ -419,10 +485,12 @@ class ReviewPage(QWidget):
                         {
                             "review_id": review_id,
                             "group_key": group_key,
+                            "group_title": _derive_song_group_title(group_key, source_path),
                             "source_file": source_file,
                             "source_path": source_path,
                             "candidate_track_id": "",
                             "candidate_track": "",
+                            "candidate_file_name": "",
                             "candidate_path": "",
                             "candidate_duration_sec": 0,
                             "score": 0.0,
@@ -450,6 +518,10 @@ class ReviewPage(QWidget):
                     {
                         "review_id": review_id,
                         "group_key": str(payload.get("lyrics_group_key") or payload.get("group_key") or Path(source_rel).stem or "未分组"),
+                        "group_title": _derive_lyrics_group_title(
+                            str(payload.get("lyrics_group_title") or payload.get("lyrics_group_key") or payload.get("group_key") or ""),
+                            source_rel,
+                        ),
                         "lyrics_source": source_rel,
                         "lyrics_file": Path(source_rel).name,
                         "lyrics_id": str(payload.get("lyrics_id") or matched.get("lyrics_id") or ""),
@@ -499,17 +571,25 @@ class ReviewPage(QWidget):
         font.setPointSize(max(font.pointSize() + 4, 13))
         item.setFont(0, font)
 
-    def _group_parent_of(self, item: QTreeWidgetItem | None) -> QTreeWidgetItem | None:
-        if item is None:
-            return None
-        node = item
-        while node.parent() is not None:
-            node = node.parent()
-        return node
+    @staticmethod
+    def _clear_group_layout(layout: QVBoxLayout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            child_layout = item.layout()
+            if child_layout is not None:
+                while child_layout.count():
+                    sub = child_layout.takeAt(0)
+                    sub_widget = sub.widget()
+                    if sub_widget is not None:
+                        sub_widget.deleteLater()
+            if widget is not None:
+                widget.deleteLater()
 
-    def _iter_group_leaf_items(self, parent: QTreeWidgetItem) -> list[QTreeWidgetItem]:
+    @staticmethod
+    def _iter_tree_leaf_items(tree: QTreeWidget) -> list[QTreeWidgetItem]:
         out: list[QTreeWidgetItem] = []
-        stack: list[QTreeWidgetItem] = [parent.child(i) for i in range(parent.childCount())]
+        stack = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
         while stack:
             node = stack.pop()
             for i in range(node.childCount()):
@@ -521,6 +601,20 @@ class ReviewPage(QWidget):
                 continue
             out.append(node)
         return out
+
+    def _group_parent_of(self, item: QTreeWidgetItem | None) -> QTreeWidgetItem | None:
+        if item is None:
+            return None
+        node = item
+        while node.parent() is not None:
+            node = node.parent()
+        return node
+
+    def _iter_group_leaf_items(self, group: dict) -> list[QTreeWidgetItem]:
+        tree = group.get("tree") if isinstance(group, dict) else None
+        if not isinstance(tree, QTreeWidget):
+            return []
+        return self._iter_tree_leaf_items(tree)
 
     def _find_meta_child(self, item: QTreeWidgetItem) -> QTreeWidgetItem | None:
         for i in range(item.childCount()):
@@ -539,82 +633,150 @@ class ReviewPage(QWidget):
                 out.append(child)
         return out
 
+    @staticmethod
+    def _aggregate_song_group_rows(rows: list[dict]) -> list[dict]:
+        merged: dict[tuple[str, str], dict] = {}
+        order: list[tuple[str, str]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            source_path = str(row.get("source_path", "") or "")
+            review_id = str(row.get("review_id", "") or "")
+            key = (review_id or source_path, source_path)
+            if key not in merged:
+                base = dict(row)
+                base["candidates"] = []
+                merged[key] = base
+                order.append(key)
+            target = merged[key]
+            candidate_track_id = str(row.get("candidate_track_id", "") or "")
+            candidate_path = str(row.get("candidate_path", "") or "")
+            candidate_file = str(row.get("candidate_file_name", "") or "")
+            candidate_track = str(row.get("candidate_track", "") or "")
+            has_candidate = any([candidate_track_id, candidate_path, candidate_file, candidate_track])
+            if has_candidate:
+                candidate = {
+                    "candidate_track_id": candidate_track_id,
+                    "candidate_path": candidate_path,
+                    "candidate_file_name": candidate_file,
+                    "candidate_track": candidate_track,
+                    "candidate_duration_sec": _safe_float(row.get("candidate_duration_sec", 0), 0),
+                    "score": _safe_float(row.get("score", 0), 0.0),
+                    "candidate_meta": dict(row.get("candidate_meta") or {}),
+                }
+                exists = False
+                for existing in target["candidates"]:
+                    if (
+                        str(existing.get("candidate_track_id", "") or "") == candidate_track_id
+                        and str(existing.get("candidate_path", "") or "") == candidate_path
+                    ):
+                        exists = True
+                        break
+                if not exists:
+                    target["candidates"].append(candidate)
+
+        out: list[dict] = []
+        for key in order:
+            row = merged[key]
+            candidates = row.get("candidates") if isinstance(row.get("candidates"), list) else []
+            candidates.sort(key=lambda c: _safe_float(c.get("score", 0), 0.0), reverse=True)
+            if candidates:
+                best = candidates[0]
+                row["candidate_track_id"] = str(best.get("candidate_track_id", "") or "")
+                row["candidate_path"] = str(best.get("candidate_path", "") or "")
+                row["candidate_file_name"] = str(best.get("candidate_file_name", "") or "")
+                row["candidate_track"] = str(best.get("candidate_track", "") or "")
+                row["candidate_duration_sec"] = _safe_float(best.get("candidate_duration_sec", 0), 0)
+                row["candidate_meta"] = dict(best.get("candidate_meta") or {})
+                row["score"] = _safe_float(best.get("score", row.get("score", 0)), 0.0)
+            else:
+                row["candidate_track_id"] = ""
+                row["candidate_path"] = ""
+                row["candidate_file_name"] = ""
+                row["candidate_track"] = ""
+                row["candidate_duration_sec"] = 0.0
+                row["candidate_meta"] = {}
+            out.append(row)
+        return out
+
     def _fill_song_tree(self, rows: list[dict]) -> None:
-        self.song_tree.clear()
         self._song_group_controls.clear()
+        self._clear_group_layout(self.song_groups_layout)
         groups: dict[str, list[dict]] = defaultdict(list)
         for row in rows:
-            groups[str(row.get("group_key", "") or "未分组")].append(row)
+            group_title = str(row.get("group_title", "") or row.get("group_key", "") or "未分组")
+            groups[group_title].append(row)
+
+        if not groups:
+            empty = QLabel("暂无歌曲待审查")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.song_groups_layout.addWidget(empty)
+            self.song_groups_layout.addStretch(1)
+            return
 
         for group_key in sorted(groups.keys(), key=lambda s: s.casefold()):
-            parent = QTreeWidgetItem([group_key, "", "", "", "", "", ""])
-            parent.setFirstColumnSpanned(True)
-            parent.setFlags(parent.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            parent.setData(0, Qt.ItemDataRole.UserRole, {"_group_header": True, "group_key": group_key})
-            self._style_group_header(parent)
-            self.song_tree.addTopLevelItem(parent)
+            group_rows = self._aggregate_song_group_rows(list(groups[group_key]))
+            frame = QFrame()
+            frame.setFrameShape(QFrame.Shape.StyledPanel)
+            frame.setStyleSheet("QFrame{background:#f8fbff;border:1px solid #d7e4f4;border-radius:8px;}")
+            host = QVBoxLayout(frame)
+            host.setContentsMargins(10, 10, 10, 10)
+            host.setSpacing(8)
+
+            title = QLabel(group_key)
+            tfont = title.font()
+            tfont.setBold(True)
+            tfont.setPointSize(max(tfont.pointSize() + 4, 14))
+            title.setFont(tfont)
+            host.addWidget(title)
+
+            header = QWidget()
+            header_layout = QHBoxLayout(header)
+            header_layout.setContentsMargins(6, 0, 6, 0)
+            header_layout.setSpacing(8)
+            for text, stretch, fixed in [
+                ("保留", 0, 44),
+                ("播放", 0, 44),
+                ("文件名", 3, 0),
+                ("来源", 0, 84),
+                ("相对相似度", 0, 96),
+                ("审查原因", 2, 0),
+            ]:
+                lbl = QLabel(text)
+                font = lbl.font()
+                font.setBold(True)
+                lbl.setFont(font)
+                if fixed > 0:
+                    lbl.setFixedWidth(fixed)
+                header_layout.addWidget(lbl, stretch)
+            host.addWidget(header)
+
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(0, 300)
+            row_controls: list[dict] = []
 
             max_dur = 300
-            for row in groups[group_key]:
-                item = QTreeWidgetItem(
-                    [
-                        "",
-                        "▶",
-                        str(row.get("source_file", "")),
-                        str(row.get("candidate_track", "")),
-                        f"{_safe_float(row.get('score', 0.0), 0.0):.4f}",
-                        str(row.get("reason", "")).replace("原因", ""),
-                        str(row.get("review_id", "")),
-                    ]
-                )
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                item.setCheckState(0, Qt.CheckState.Checked)
-                item.setData(0, Qt.ItemDataRole.UserRole, dict(row))
-                parent.addChild(item)
+            for row in group_rows:
+                row_ctrl = self._build_song_row_widget(row, slider)
+                row_controls.append(row_ctrl)
+                host.addWidget(row_ctrl["container"])
                 max_dur = max(max_dur, _safe_int(row.get("candidate_duration_sec", 0), 0))
+                candidates = row.get("candidates") if isinstance(row.get("candidates"), list) else []
+                for candidate in candidates:
+                    max_dur = max(max_dur, _safe_int(candidate.get("candidate_duration_sec", 0), 0))
 
-                meta = row.get("candidate_meta") if isinstance(row.get("candidate_meta"), dict) else {}
-                track_id = str(row.get("candidate_track_id", "") or "")
-                editable_fields = [
-                    ("title", "标题"),
-                    ("artist", "艺术家"),
-                    ("album", "专辑"),
-                    ("language_kind", "语言"),
-                    ("preference_level", "喜好"),
-                ]
-                for field_key, field_label in editable_fields:
-                    field_value = str(meta.get(field_key, "") or "")
-                    meta_item = QTreeWidgetItem(["", "", field_label, field_value, "", "", ""])
-                    meta_item.setData(
-                        0,
-                        Qt.ItemDataRole.UserRole,
-                        {
-                            "_meta_row": True,
-                            "track_id": track_id,
-                            "field_key": field_key,
-                            "field_label": field_label,
-                        },
-                    )
-                    meta_item.setHidden(True)
-                    item.addChild(meta_item)
-
-            footer = QTreeWidgetItem(["", "", "", "", "", "", ""])
-            footer.setFirstColumnSpanned(True)
-            footer.setFlags(footer.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            footer.setData(0, Qt.ItemDataRole.UserRole, {"_footer": True, "group_key": group_key})
-            parent.addChild(footer)
-
-            host = QWidget(self.song_tree)
-            row_ops = QHBoxLayout(host)
-            row_ops.setContentsMargins(8, 6, 8, 6)
+            row_ops_host = QWidget()
+            row_ops = QHBoxLayout(row_ops_host)
+            row_ops.setContentsMargins(0, 2, 0, 0)
             row_ops.setSpacing(8)
+            btn_invert = QPushButton("反选")
             btn_same = QPushButton("这是相同歌曲")
             btn_diff = QPushButton("这是不同歌曲")
             btn_save = QPushButton("保存勾选的文件")
             btn_cancel = QPushButton("取消导入")
-            slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(0, max_dur)
             label_time = QLabel("00:00")
+            row_ops.addWidget(btn_invert)
             row_ops.addWidget(btn_same)
             row_ops.addWidget(btn_diff)
             row_ops.addWidget(btn_save)
@@ -623,99 +785,432 @@ class ReviewPage(QWidget):
             row_ops.addWidget(slider, 1)
             row_ops.addWidget(label_time)
             row_ops.addStretch(1)
-            self.song_tree.setItemWidget(footer, 0, host)
+            host.addWidget(row_ops_host)
 
-            self._song_group_controls[id(parent)] = {"parent": parent, "slider": slider}
+            controls = {"group_key": group_key, "rows": row_controls, "slider": slider}
+            self._song_group_controls[group_key] = controls
             slider.valueChanged.connect(lambda value, lbl=label_time: lbl.setText(_format_mmss(value)))
-            btn_same.clicked.connect(lambda _=False, p=parent: self._apply_song_preset_same_for_group(p))
-            btn_diff.clicked.connect(lambda _=False, p=parent: self._apply_song_preset_diff_for_group(p))
-            btn_save.clicked.connect(lambda _=False, p=parent: self._save_song_group(p))
-            btn_cancel.clicked.connect(lambda _=False, p=parent: self._cancel_song_group(p))
+            btn_invert.clicked.connect(lambda _=False, g=controls: self._invert_song_group(g))
+            btn_same.clicked.connect(lambda _=False, g=controls: self._apply_song_preset_same_for_group(g))
+            btn_diff.clicked.connect(lambda _=False, g=controls: self._apply_song_preset_diff_for_group(g))
+            btn_save.clicked.connect(lambda _=False, g=controls: self._save_song_group(g))
+            btn_cancel.clicked.connect(lambda _=False, g=controls: self._cancel_song_group(g))
+            self._register_dynamic_button(btn_invert)
             self._register_dynamic_button(btn_same)
             self._register_dynamic_button(btn_diff)
             self._register_dynamic_button(btn_save)
             self._register_dynamic_button(btn_cancel)
 
-            parent.setExpanded(True)
-            self._apply_song_preset_same_for_group(parent)
+            self.song_groups_layout.addWidget(frame)
+            self._apply_song_preset_same_for_group(controls)
+        self.song_groups_layout.addStretch(1)
+
+    def _build_song_row_widget(self, row: dict, slider: QSlider) -> dict:
+        payload = dict(row)
+        candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
+        if not candidates:
+            candidate_track_id = str(payload.get("candidate_track_id", "") or "")
+            candidate_file = str(payload.get("candidate_file_name", "") or "")
+            candidate_path = str(payload.get("candidate_path", "") or "")
+            candidate_track = str(payload.get("candidate_track", "") or "")
+            if any([candidate_track_id, candidate_file, candidate_path, candidate_track]):
+                candidates = [
+                    {
+                        "candidate_track_id": candidate_track_id,
+                        "candidate_file_name": candidate_file,
+                        "candidate_path": candidate_path,
+                        "candidate_track": candidate_track,
+                        "candidate_duration_sec": _safe_float(payload.get("candidate_duration_sec", 0), 0),
+                        "score": _safe_float(payload.get("score", 0), 0.0),
+                    }
+                ]
+        payload["candidates"] = candidates
+        container = QFrame()
+        container.setFrameShape(QFrame.Shape.NoFrame)
+        container.setStyleSheet("QFrame{background:#ffffff;border:1px solid #d8e2ef;border-radius:6px;}")
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(3)
+
+        top = _ClickableFrame()
+        top.setFrameShape(QFrame.Shape.NoFrame)
+        top.setStyleSheet("QFrame{background:transparent;border:none;}")
+        row_layout = QHBoxLayout(top)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+
+        checkbox = QCheckBox()
+        checkbox.setChecked(True)
+        checkbox.setStyleSheet("QCheckBox::indicator{width:28px;height:28px;}")
+
+        btn_play = QPushButton("▶")
+        btn_play.setFixedWidth(34)
+        btn_play.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        lbl_file_name = _ClickableLabel(str(payload.get("source_file", "") or ""))
+        lbl_file_name.setMinimumWidth(260)
+        lbl_file_name.setToolTip(str(payload.get("source_path", "") or ""))
+
+        lbl_source_kind = QLabel("待导入")
+        lbl_source_kind.setFixedWidth(84)
+        lbl_source_kind.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_source_kind.setStyleSheet("color:#2f7dff;")
+
+        lbl_score = _ClickableLabel(f"{_safe_float(payload.get('score', 0.0), 0.0):.4f}")
+        lbl_score.setFixedWidth(96)
+        lbl_score.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        lbl_reason = _ClickableLabel(str(payload.get("reason", "")).replace("原因", ""))
+        lbl_reason.setToolTip(str(payload.get("review_id", "") or ""))
+
+        row_layout.addWidget(checkbox)
+        row_layout.addWidget(btn_play)
+        row_layout.addWidget(lbl_file_name, 3)
+        row_layout.addWidget(lbl_source_kind)
+        row_layout.addWidget(lbl_score)
+        row_layout.addWidget(lbl_reason, 2)
+        outer.addWidget(top)
+
+        row_ctrl: dict[str, object] = {
+            "row": payload,
+            "container": container,
+            "checkbox": checkbox,
+            "source_checkbox": checkbox,
+            "score": _safe_float(payload.get("score", 0), 0.0),
+            "candidate_controls": [],
+        }
+
+        btn_play.clicked.connect(
+            lambda _=False, r=payload, s=slider: self._play_with_external_player(
+                str(r.get("source_path", "")).strip(),
+                s.value(),
+            )
+        )
+        for candidate in candidates:
+            candidate_row = _ClickableFrame()
+            candidate_row.setFrameShape(QFrame.Shape.NoFrame)
+            candidate_row.setStyleSheet("QFrame{background:transparent;border:none;}")
+            candidate_layout = QHBoxLayout(candidate_row)
+            candidate_layout.setContentsMargins(0, 0, 0, 0)
+            candidate_layout.setSpacing(8)
+
+            candidate_checkbox = QCheckBox()
+            candidate_checkbox.setChecked(False)
+            candidate_checkbox.setStyleSheet("QCheckBox::indicator{width:28px;height:28px;}")
+            btn_play_candidate = QPushButton("▶")
+            btn_play_candidate.setFixedWidth(34)
+            btn_play_candidate.setCursor(Qt.CursorShape.PointingHandCursor)
+
+            candidate_file = str(candidate.get("candidate_file_name", "") or "").strip()
+            candidate_track = str(candidate.get("candidate_track", "") or "").strip()
+            candidate_text = candidate_file or candidate_track or "（无候选）"
+            lbl_candidate_name = _ClickableLabel(candidate_text)
+            lbl_candidate_name.setMinimumWidth(260)
+            candidate_tip = str(candidate.get("candidate_path", "") or "")
+            if candidate_track:
+                candidate_tip = f"{candidate_tip}\n{candidate_track}" if candidate_tip else candidate_track
+            lbl_candidate_name.setToolTip(candidate_tip)
+
+            lbl_candidate_source = QLabel("库")
+            lbl_candidate_source.setFixedWidth(84)
+            lbl_candidate_source.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl_candidate_source.setStyleSheet("color:#4f5f72;")
+            lbl_candidate_score = QLabel("1.0000")
+            lbl_candidate_score.setFixedWidth(96)
+            lbl_candidate_score.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            lbl_candidate_reason = _ClickableLabel(str(payload.get("reason", "")).replace("原因", ""))
+            lbl_candidate_reason.setStyleSheet("color:#5d6f86;")
+
+            candidate_layout.addWidget(candidate_checkbox)
+            candidate_layout.addWidget(btn_play_candidate)
+            candidate_layout.addWidget(lbl_candidate_name, 3)
+            candidate_layout.addWidget(lbl_candidate_source)
+            candidate_layout.addWidget(lbl_candidate_score)
+            candidate_layout.addWidget(lbl_candidate_reason, 2)
+            outer.addWidget(candidate_row)
+            row_ctrl["candidate_controls"].append(
+                {
+                    "checkbox": candidate_checkbox,
+                    "track_id": str(candidate.get("candidate_track_id", "") or ""),
+                }
+            )
+
+            btn_play_candidate.clicked.connect(
+                lambda _=False, c=dict(candidate), s=slider: self._play_with_external_player(
+                    str(c.get("candidate_path", "")).strip(),
+                    s.value(),
+                )
+            )
+        return row_ctrl
+
+    def _toggle_song_meta_panel(self, row_ctrl: dict) -> None:
+        panel = row_ctrl.get("meta_panel")
+        if not isinstance(panel, QWidget):
+            return
+        panel.setVisible(not panel.isVisible())
+
+    def _refresh_song_row_candidate_label(self, row_ctrl: dict) -> None:
+        row = row_ctrl.get("row")
+        if not isinstance(row, dict):
+            return
+        track_id = str(row_ctrl.get("candidate_track_id", "") or row.get("candidate_track_id", "") or "")
+        meta = row.get("candidate_meta") if isinstance(row.get("candidate_meta"), dict) else {}
+        title = str(meta.get("title", "") or "").strip()
+        artist = str(meta.get("artist", "") or "").strip()
+        if track_id:
+            detail = f"{artist or 'Unknown Artist'} - {title or 'Unknown Title'} ({track_id})"
+        else:
+            detail = str(row.get("candidate_track", "") or "")
+        row["candidate_track"] = detail
+        name_widget = row_ctrl.get("candidate_name_label")
+        detail_widget = row_ctrl.get("candidate_detail_label")
+        if isinstance(name_widget, QLabel):
+            current_file = str(row.get("candidate_file_name", "") or "").strip()
+            name_widget.setText(current_file or detail)
+        if isinstance(detail_widget, QLabel):
+            detail_widget.setText(detail)
+
+    def _commit_song_meta_edit(self, row_ctrl: dict, field_key: str, value) -> None:
+        track_id = str(row_ctrl.get("candidate_track_id", "") or "")
+        if not track_id:
+            return
+        cache = row_ctrl.get("meta_cache")
+        if not isinstance(cache, dict):
+            cache = {}
+            row_ctrl["meta_cache"] = cache
+        old_value = cache.get(field_key)
+        if field_key == "preference_level":
+            new_value = max(1, min(10, _safe_int(value, 5)))
+            old_comp = max(1, min(10, _safe_int(old_value, 5)))
+            if new_value == old_comp:
+                return
+            payload_value = int(new_value)
+        else:
+            new_value = str(value or "").strip()
+            old_comp = str(old_value or "").strip()
+            if new_value == old_comp:
+                return
+            payload_value = new_value
+        try:
+            self.facade.update_tracks_fields([track_id], {field_key: payload_value})
+        except Exception as exc:
+            QMessageBox.warning(self, "编辑候选元数据", f"保存失败: {exc}")
+            editor_map = row_ctrl.get("meta_widgets")
+            editor = editor_map.get(field_key) if isinstance(editor_map, dict) else None
+            if isinstance(editor, QLineEdit):
+                editor.setText(str(old_value or ""))
+            elif isinstance(editor, QSpinBox):
+                editor.setValue(max(1, min(10, _safe_int(old_value, 5))))
+            return
+
+        cache[field_key] = payload_value
+        row = row_ctrl.get("row")
+        if isinstance(row, dict):
+            meta = row.get("candidate_meta")
+            if not isinstance(meta, dict):
+                meta = {}
+                row["candidate_meta"] = meta
+            meta[field_key] = payload_value
+        if field_key in {"title", "artist"}:
+            self._refresh_song_row_candidate_label(row_ctrl)
+        self.review_changed.emit()
 
     def _fill_lyrics_tree(self, rows: list[dict]) -> None:
-        self.lyrics_tree.clear()
         self._lyrics_group_controls.clear()
+        self._clear_group_layout(self.lyrics_groups_layout)
         groups: dict[str, list[dict]] = defaultdict(list)
         for row in rows:
-            groups[str(row.get("group_key", "") or "未分组")].append(row)
+            groups[str(row.get("group_title", "") or row.get("group_key", "") or "未分组")].append(row)
+
+        if not groups:
+            empty = QLabel("暂无歌词待审查")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.lyrics_groups_layout.addWidget(empty)
+            self.lyrics_groups_layout.addStretch(1)
+            return
 
         for group_key in sorted(groups.keys(), key=lambda s: s.casefold()):
             group_rows = list(groups[group_key])
-            parent = QTreeWidgetItem([group_key, "", "", "", "", ""])
-            parent.setFirstColumnSpanned(True)
-            parent.setFlags(parent.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            parent.setData(0, Qt.ItemDataRole.UserRole, {"_group_header": True, "group_key": group_key})
-            self._style_group_header(parent)
-            self.lyrics_tree.addTopLevelItem(parent)
+            frame = QFrame()
+            frame.setFrameShape(QFrame.Shape.StyledPanel)
+            frame.setStyleSheet("QFrame{background:#f8fbff;border:1px solid #d7e4f4;border-radius:8px;}")
+            host = QVBoxLayout(frame)
+            host.setContentsMargins(10, 10, 10, 10)
+            host.setSpacing(8)
 
-            group_items: list[QTreeWidgetItem] = []
+            title = QLabel(group_key)
+            tfont = title.font()
+            tfont.setBold(True)
+            tfont.setPointSize(max(tfont.pointSize() + 4, 14))
+            title.setFont(tfont)
+            host.addWidget(title)
+
+            header = QWidget()
+            header_layout = QHBoxLayout(header)
+            header_layout.setContentsMargins(6, 0, 6, 0)
+            header_layout.setSpacing(8)
+            for text, stretch, fixed in [
+                ("保留", 0, 44),
+                ("歌词文件", 3, 0),
+                ("相似度", 0, 88),
+                ("说明", 2, 0),
+            ]:
+                lbl = QLabel(text)
+                font = lbl.font()
+                font.setBold(True)
+                lbl.setFont(font)
+                if fixed > 0:
+                    lbl.setFixedWidth(fixed)
+                header_layout.addWidget(lbl, stretch)
+            host.addWidget(header)
+
+            row_controls: list[dict] = []
             for row in group_rows:
-                item = QTreeWidgetItem(
-                    [
-                        "",
-                        str(row.get("lyrics_file", "")),
-                        f"{_safe_float(row.get('score', 0.0), 0.0):.4f}",
-                        str(row.get("reason", "")).replace("原因", ""),
-                        str(row.get("review_id", "")),
-                        "",
-                    ]
-                )
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                item.setCheckState(0, Qt.CheckState.Unchecked)
-                item.setData(0, Qt.ItemDataRole.UserRole, dict(row))
-                parent.addChild(item)
-                group_items.append(item)
+                row_ctrl = self._build_lyrics_row_widget(row)
+                row_controls.append(row_ctrl)
+                host.addWidget(row_ctrl["container"])
 
-                suggest_text = str(row.get("suggest_track", "") or "").strip()
-                link_label = f"建议：{suggest_text}" if suggest_text else ""
-                link_item = QTreeWidgetItem(["", "🔗", "", link_label, "", "点击编辑绑定"])
-                link_item.setFlags((link_item.flags() | Qt.ItemFlag.ItemIsSelectable) & ~Qt.ItemFlag.ItemIsUserCheckable)
-                link_payload = dict(row)
-                link_payload["_link_row"] = True
-                link_item.setData(0, Qt.ItemDataRole.UserRole, link_payload)
-                item.addChild(link_item)
-                item.setExpanded(True)
-
-            footer = QTreeWidgetItem(["", "", "", "", "", ""])
-            footer.setFirstColumnSpanned(True)
-            footer.setFlags(footer.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            footer.setData(0, Qt.ItemDataRole.UserRole, {"_footer": True, "group_key": group_key})
-            parent.addChild(footer)
-
-            host = QWidget(self.lyrics_tree)
-            row_ops = QHBoxLayout(host)
-            row_ops.setContentsMargins(8, 6, 8, 6)
+            row_ops_host = QWidget()
+            row_ops = QHBoxLayout(row_ops_host)
+            row_ops.setContentsMargins(0, 2, 0, 0)
             row_ops.setSpacing(8)
+            btn_invert = QPushButton("反选")
             btn_same = QPushButton("这是相同歌词")
             btn_diff = QPushButton("这是不同歌词")
             btn_save = QPushButton("保存勾选的文件")
             btn_cancel = QPushButton("取消导入")
+            row_ops.addWidget(btn_invert)
             row_ops.addWidget(btn_same)
             row_ops.addWidget(btn_diff)
             row_ops.addWidget(btn_save)
             row_ops.addWidget(btn_cancel)
             row_ops.addStretch(1)
-            self.lyrics_tree.setItemWidget(footer, 0, host)
+            host.addWidget(row_ops_host)
 
-            self._lyrics_group_controls[id(parent)] = {"parent": parent}
-            btn_same.clicked.connect(lambda _=False, p=parent: self._apply_lyrics_preset_same_for_group(p))
-            btn_diff.clicked.connect(lambda _=False, p=parent: self._apply_lyrics_preset_diff_for_group(p))
-            btn_save.clicked.connect(lambda _=False, p=parent: self._save_lyrics_group(p))
-            btn_cancel.clicked.connect(lambda _=False, p=parent: self._cancel_lyrics_group(p))
+            controls = {"group_key": group_key, "rows": row_controls}
+            self._lyrics_group_controls[group_key] = controls
+            btn_invert.clicked.connect(lambda _=False, g=controls: self._invert_lyrics_group(g))
+            btn_same.clicked.connect(lambda _=False, g=controls: self._apply_lyrics_preset_same_for_group(g))
+            btn_diff.clicked.connect(lambda _=False, g=controls: self._apply_lyrics_preset_diff_for_group(g))
+            btn_save.clicked.connect(lambda _=False, g=controls: self._save_lyrics_group(g))
+            btn_cancel.clicked.connect(lambda _=False, g=controls: self._cancel_lyrics_group(g))
+            self._register_dynamic_button(btn_invert)
             self._register_dynamic_button(btn_same)
             self._register_dynamic_button(btn_diff)
             self._register_dynamic_button(btn_save)
             self._register_dynamic_button(btn_cancel)
 
-            self._apply_default_lyrics_checks(group_rows, group_items)
-            parent.setExpanded(True)
+            self._apply_default_lyrics_checks(group_rows, row_controls)
+            self.lyrics_groups_layout.addWidget(frame)
+        self.lyrics_groups_layout.addStretch(1)
+
+    def _build_lyrics_row_widget(self, row: dict) -> dict:
+        payload = dict(row)
+        container = QFrame()
+        container.setFrameShape(QFrame.Shape.NoFrame)
+        container.setStyleSheet("QFrame{background:#ffffff;border:1px solid #d8e2ef;border-radius:6px;}")
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(2)
+
+        top = _ClickableFrame()
+        top.setFrameShape(QFrame.Shape.NoFrame)
+        top.setStyleSheet("QFrame{background:transparent;border:none;}")
+        row_layout = QHBoxLayout(top)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+
+        checkbox = QCheckBox()
+        checkbox.setChecked(False)
+        checkbox.setStyleSheet("QCheckBox::indicator{width:28px;height:28px;}")
+        lbl_file = _ClickableLabel(str(payload.get("lyrics_file", "") or ""))
+        lbl_file.setMinimumWidth(260)
+        lbl_file.setToolTip(str(payload.get("lyrics_source", "") or ""))
+        lbl_file.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        lbl_score = _ClickableLabel(f"{_safe_float(payload.get('score', 0.0), 0.0):.4f}")
+        lbl_score.setFixedWidth(88)
+        lbl_score.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lbl_score.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        lbl_reason = _ClickableLabel(str(payload.get("reason", "")).replace("原因", ""))
+        lbl_reason.setToolTip(str(payload.get("review_id", "") or ""))
+        lbl_reason.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        row_layout.addWidget(checkbox)
+        row_layout.addWidget(lbl_file, 3)
+        row_layout.addWidget(lbl_score)
+        row_layout.addWidget(lbl_reason, 2)
+        outer.addWidget(top)
+
+        link_bind_row = _ClickableFrame()
+        link_bind_row.setFrameShape(QFrame.Shape.NoFrame)
+        link_bind_row.setStyleSheet("QFrame{background:transparent;border:none;}")
+        bind_layout = QHBoxLayout(link_bind_row)
+        bind_layout.setContentsMargins(34, 0, 0, 0)
+        bind_layout.setSpacing(6)
+        bind_icon = QLabel("🔗")
+        bind_text = QLabel("点击绑定数据库歌曲")
+        bind_text.setStyleSheet("color:#5d6f86;")
+        bind_icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        bind_text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        bind_layout.addWidget(bind_icon)
+        bind_layout.addWidget(bind_text, 1)
+        bind_layout.addStretch(1)
+        outer.addWidget(link_bind_row)
+
+        suggest_text = str(payload.get("suggest_track", "") or "").strip()
+        link_suggest_row: _ClickableFrame | None = None
+        if suggest_text:
+            link_suggest_row = _ClickableFrame()
+            link_suggest_row.setFrameShape(QFrame.Shape.NoFrame)
+            link_suggest_row.setStyleSheet("QFrame{background:transparent;border:none;}")
+            suggest_layout = QHBoxLayout(link_suggest_row)
+            suggest_layout.setContentsMargins(34, 0, 0, 0)
+            suggest_layout.setSpacing(6)
+            suggest_icon = QLabel("🔗")
+            suggest_label = QLabel(f"建议：{suggest_text}")
+            suggest_label.setStyleSheet("color:#425b7a;")
+            suggest_icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            suggest_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            suggest_layout.addWidget(suggest_icon)
+            suggest_layout.addWidget(suggest_label, 1)
+            suggest_layout.addStretch(1)
+            outer.addWidget(link_suggest_row)
+
+        row_ctrl: dict[str, object] = {
+            "row": payload,
+            "container": container,
+            "checkbox": checkbox,
+        }
+
+        def _preview() -> None:
+            self._on_lyrics_row_clicked(payload)
+
+        def _edit_mapping() -> None:
+            self._map_lyrics_row(payload)
+
+        checkbox.clicked.connect(lambda _checked=False: _preview())
+        top.clicked.connect(_preview)
+        link_bind_row.clicked.connect(_edit_mapping)
+        if link_suggest_row is not None:
+            link_suggest_row.clicked.connect(_edit_mapping)
+        return row_ctrl
+
+    def _on_lyrics_row_clicked(self, row: dict) -> None:
+        payload = dict(row or {})
+        if not payload:
+            return
+        row_key = str(payload.get("lyrics_id", "") or payload.get("lyrics_source", "") or "")
+        if self._preview_rows:
+            prev = self._preview_rows[-1]
+            prev_key = str(prev.get("lyrics_id", "") or prev.get("lyrics_source", "") or "")
+            if row_key and row_key == prev_key:
+                return
+        self._preview_rows.append(payload)
+        rows = list(self._preview_rows)
+        if len(rows) == 1:
+            rows = [rows[0], rows[0]]
+        self.preview_left.setPlainText(self._read_lyrics_text(rows[-2]))
+        self.preview_right.setPlainText(self._read_lyrics_text(rows[-1]))
 
     @staticmethod
     def _lyrics_line_count(row: dict) -> int:
@@ -735,20 +1230,25 @@ class ReviewPage(QWidget):
         keys.discard("")
         return len(keys) <= 1
 
-    def _apply_default_lyrics_checks(self, rows: list[dict], items: list[QTreeWidgetItem]) -> None:
-        if not rows or not items:
+    def _apply_default_lyrics_checks(self, rows: list[dict], row_controls: list[dict]) -> None:
+        if not rows or not row_controls:
             return
-        pairs = list(zip(rows, items))
+        for row_ctrl in row_controls:
+            checkbox = row_ctrl.get("checkbox")
+            if isinstance(checkbox, QCheckBox):
+                checkbox.setChecked(False)
+
+        pairs = list(zip(rows, row_controls))
         if self._lyrics_group_same_file(rows):
             target = max(
                 pairs,
                 key=lambda p: (
                     self._lyrics_line_count(p[0]),
-                    self._lyrics_source_mtime(p[0]),
-                    self._lyrics_imported_at(p[0]),
+                    -_lyrics_file_bracket_count(str(p[0].get("lyrics_file", "") or "")),
+                    -len(str(p[0].get("lyrics_file", "") or "")),
                     str(p[0].get("lyrics_source", "") or ""),
                 ),
-            )[1]
+            )
         else:
             target = max(
                 pairs,
@@ -758,8 +1258,11 @@ class ReviewPage(QWidget):
                     self._lyrics_line_count(p[0]),
                     str(p[0].get("lyrics_source", "") or ""),
                 ),
-            )[1]
-        target.setCheckState(0, Qt.CheckState.Checked)
+            )
+        target_ctrl = target[1]
+        checkbox = target_ctrl.get("checkbox")
+        if isinstance(checkbox, QCheckBox):
+            checkbox.setChecked(True)
 
     def _fill_file_tree(self, rows: list[dict]) -> None:
         self.file_tree.clear()
@@ -822,6 +1325,20 @@ class ReviewPage(QWidget):
         self.review_changed.emit()
         QMessageBox.information(self, "审查处理", f"已处理 {count} 项。")
 
+    def _invert_check_state_tree(self, tree: QTreeWidget) -> None:
+        stack: list[QTreeWidgetItem] = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
+        while stack:
+            item = stack.pop()
+            for i in range(item.childCount()):
+                stack.append(item.child(i))
+            row = item.data(0, Qt.ItemDataRole.UserRole) or {}
+            if not row or row.get("_meta_row") or row.get("_link_row"):
+                continue
+            item.setCheckState(
+                0,
+                Qt.CheckState.Unchecked if item.checkState(0) == Qt.CheckState.Checked else Qt.CheckState.Checked,
+            )
+
     def _play_with_external_player(self, path_text: str, start_sec: int = 0) -> None:
         target = str(path_text or "").strip()
         if not target:
@@ -851,7 +1368,13 @@ class ReviewPage(QWidget):
         except Exception as exc:
             QMessageBox.critical(self, "播放失败", str(exc))
 
-    def _on_song_item_clicked(self, item: QTreeWidgetItem, col: int) -> None:
+    def _song_controls_for_tree(self, tree: QTreeWidget) -> dict | None:
+        for controls in self._song_group_controls.values():
+            if controls.get("tree") is tree:
+                return controls
+        return None
+
+    def _on_song_item_clicked(self, item: QTreeWidgetItem, col: int, tree: QTreeWidget | None = None) -> None:
         row = item.data(0, Qt.ItemDataRole.UserRole) or {}
         if not row or row.get("_footer"):
             return
@@ -859,10 +1382,11 @@ class ReviewPage(QWidget):
             self._edit_song_meta_row(item, row)
             return
         if col == 1:
-            parent = self._group_parent_of(item)
             start = 0
-            if parent is not None:
-                controls = self._song_group_controls.get(id(parent), {})
+            if tree is None:
+                tree = item.treeWidget()
+            if isinstance(tree, QTreeWidget):
+                controls = self._song_controls_for_tree(tree) or {}
                 slider = controls.get("slider")
                 if isinstance(slider, QSlider):
                     start = slider.value()
@@ -947,13 +1471,19 @@ class ReviewPage(QWidget):
         )
         self.reload_reviews()
 
-    def _on_lyrics_item_clicked(self, item: QTreeWidgetItem, _col: int) -> None:
+    def _on_lyrics_item_clicked(self, item: QTreeWidgetItem, _col: int, _tree: QTreeWidget | None = None) -> None:
         row = item.data(0, Qt.ItemDataRole.UserRole) or {}
         if not row or row.get("_footer") or row.get("_meta_row"):
             return
         if row.get("_link_row"):
             self._map_lyrics_row(row)
             return
+        row_key = str(row.get("lyrics_id", "") or row.get("lyrics_source", "") or "")
+        if self._preview_rows:
+            prev = self._preview_rows[-1]
+            prev_key = str(prev.get("lyrics_id", "") or prev.get("lyrics_source", "") or "")
+            if row_key and row_key == prev_key:
+                return
         self._preview_rows.append(dict(row))
         rows = list(self._preview_rows)
         if len(rows) == 1:
@@ -996,92 +1526,197 @@ class ReviewPage(QWidget):
         finally:
             self._sync_preview_scroll = False
 
-    def _review_ids_for_group(self, parent: QTreeWidgetItem) -> list[str]:
+    def _review_ids_for_group(self, group: dict) -> list[str]:
         ids: set[str] = set()
-        for item in self._iter_group_leaf_items(parent):
-            row = item.data(0, Qt.ItemDataRole.UserRole) or {}
+        rows = group.get("rows") if isinstance(group, dict) else []
+        for row_ctrl in rows if isinstance(rows, list) else []:
+            row = row_ctrl.get("row") if isinstance(row_ctrl, dict) else {}
+            if not isinstance(row, dict):
+                continue
             rid = str(row.get("review_id", "") or "")
             if rid:
                 ids.add(rid)
         return sorted(ids)
 
-    def _apply_song_preset_same_for_group(self, parent: QTreeWidgetItem) -> None:
-        best_by_source: dict[str, tuple[float, QTreeWidgetItem]] = {}
-        all_leaf: list[QTreeWidgetItem] = []
-        for child in self._iter_group_leaf_items(parent):
-            row = child.data(0, Qt.ItemDataRole.UserRole) or {}
-            source = str(row.get("source_file", "") or "")
-            score = _safe_float(row.get("score", 0), 0)
-            all_leaf.append(child)
-            current = best_by_source.get(source)
-            if current is None or score > current[0]:
-                best_by_source[source] = (score, child)
-        keep = {id(v[1]) for v in best_by_source.values()}
-        for child in all_leaf:
-            child.setCheckState(0, Qt.CheckState.Checked if id(child) in keep else Qt.CheckState.Unchecked)
+    def _apply_song_preset_same_for_group(self, group: dict) -> None:
+        best_row: dict | None = None
+        best_score = float("-inf")
+        all_rows: list[dict] = []
+        rows = group.get("rows") if isinstance(group, dict) else []
+        for row_ctrl in rows if isinstance(rows, list) else []:
+            row = row_ctrl.get("row") if isinstance(row_ctrl, dict) else {}
+            if not isinstance(row, dict):
+                continue
+            score = _safe_float(row.get("score", 0), 0.0)
+            all_rows.append(row_ctrl)
+            if score > best_score:
+                best_score = score
+                best_row = row_ctrl
+        keep = {id(best_row)} if best_row is not None else set()
+        for row_ctrl in all_rows:
+            checkbox = row_ctrl.get("checkbox") if isinstance(row_ctrl, dict) else None
+            if isinstance(checkbox, QCheckBox):
+                checkbox.setChecked(id(row_ctrl) in keep)
+            candidate_controls = row_ctrl.get("candidate_controls") if isinstance(row_ctrl, dict) else []
+            for candidate in candidate_controls if isinstance(candidate_controls, list) else []:
+                candidate_checkbox = candidate.get("checkbox") if isinstance(candidate, dict) else None
+                if isinstance(candidate_checkbox, QCheckBox):
+                    candidate_checkbox.setChecked(False)
 
-    def _apply_song_preset_diff_for_group(self, parent: QTreeWidgetItem) -> None:
-        for child in self._iter_group_leaf_items(parent):
-            child.setCheckState(0, Qt.CheckState.Checked)
+    def _invert_song_group(self, group: dict) -> None:
+        rows = group.get("rows") if isinstance(group, dict) else []
+        for row_ctrl in rows if isinstance(rows, list) else []:
+            checkbox = row_ctrl.get("checkbox") if isinstance(row_ctrl, dict) else None
+            if isinstance(checkbox, QCheckBox):
+                checkbox.setChecked(not checkbox.isChecked())
+            candidate_controls = row_ctrl.get("candidate_controls") if isinstance(row_ctrl, dict) else []
+            for candidate in candidate_controls if isinstance(candidate_controls, list) else []:
+                candidate_checkbox = candidate.get("checkbox") if isinstance(candidate, dict) else None
+                if isinstance(candidate_checkbox, QCheckBox):
+                    candidate_checkbox.setChecked(not candidate_checkbox.isChecked())
 
-    def _save_song_group(self, parent: QTreeWidgetItem) -> None:
+    def _apply_song_preset_diff_for_group(self, group: dict) -> None:
+        rows = group.get("rows") if isinstance(group, dict) else []
+        for row_ctrl in rows if isinstance(rows, list) else []:
+            checkbox = row_ctrl.get("checkbox") if isinstance(row_ctrl, dict) else None
+            if isinstance(checkbox, QCheckBox):
+                checkbox.setChecked(True)
+            candidate_controls = row_ctrl.get("candidate_controls") if isinstance(row_ctrl, dict) else []
+            for candidate in candidate_controls if isinstance(candidate_controls, list) else []:
+                candidate_checkbox = candidate.get("checkbox") if isinstance(candidate, dict) else None
+                if isinstance(candidate_checkbox, QCheckBox):
+                    candidate_checkbox.setChecked(True)
+
+    def _save_song_group(self, group: dict) -> None:
         status_by_review: dict[str, bool] = {}
         restore_track_ids: set[str] = set()
-        for child in self._iter_group_leaf_items(parent):
-            row = child.data(0, Qt.ItemDataRole.UserRole) or {}
+        deferred_rows: dict[str, dict] = {}
+        rows = group.get("rows") if isinstance(group, dict) else []
+        for row_ctrl in rows if isinstance(rows, list) else []:
+            row = row_ctrl.get("row") if isinstance(row_ctrl, dict) else {}
+            if not isinstance(row, dict):
+                continue
             rid = str(row.get("review_id", "") or "")
             if not rid:
                 continue
-            checked = child.checkState(0) == Qt.CheckState.Checked
-            status_by_review[rid] = bool(status_by_review.get(rid, False) or checked)
-            if checked:
+            checkbox = row_ctrl.get("checkbox") if isinstance(row_ctrl, dict) else None
+            keep_source = bool(checkbox.isChecked()) if isinstance(checkbox, QCheckBox) else False
+            keep_library = False
+            selected_library_track_ids: list[str] = []
+            candidate_controls = row_ctrl.get("candidate_controls") if isinstance(row_ctrl, dict) else []
+            for candidate in candidate_controls if isinstance(candidate_controls, list) else []:
+                if not isinstance(candidate, dict):
+                    continue
+                candidate_checkbox = candidate.get("checkbox")
+                if not isinstance(candidate_checkbox, QCheckBox):
+                    continue
+                if not candidate_checkbox.isChecked():
+                    continue
+                tid = str(candidate.get("track_id", "") or "")
+                if tid:
+                    keep_library = True
+                    selected_library_track_ids.append(tid)
+
+            status_by_review[rid] = bool(status_by_review.get(rid, False) or keep_source)
+            if keep_source:
                 restore_id = str(row.get("restore_track_id", "") or "")
                 if restore_id:
                     restore_track_ids.add(restore_id)
+                if bool(row.get("deferred_import", False)):
+                    payload = dict(row)
+                    payload["_keep_library"] = keep_library
+                    payload["_selected_library_track_ids"] = selected_library_track_ids
+                    deferred_rows[rid] = payload
         if not status_by_review:
             return
         if restore_track_ids:
             self.facade.restore_tracks(sorted(restore_track_ids))
+
+        failed_imports: list[tuple[str, str]] = []
+        for rid, row in deferred_rows.items():
+            source_path = str(row.get("source_path", "") or "").strip()
+            existing_track_id = str(row.get("candidate_track_id", "") or "").strip() or None
+            keep_library = bool(row.get("_keep_library", False))
+            if not source_path:
+                failed_imports.append((rid, "缺少源路径"))
+                continue
+            try:
+                result = self.facade.import_track_from_review(
+                    source_path,
+                    existing_track_id=existing_track_id,
+                    replace_existing=not keep_library,
+                )
+            except Exception as exc:
+                failed_imports.append((rid, str(exc)))
+                continue
+            if str(result.get("status", "")) != "imported":
+                failed_imports.append((rid, str(result)))
+                continue
+        failed_ids = {rid for rid, _ in failed_imports}
         resolved_ids = [rid for rid, keep in status_by_review.items() if keep]
         ignored_ids = [rid for rid, keep in status_by_review.items() if not keep]
+        resolved_ids = [rid for rid in resolved_ids if rid not in failed_ids]
         if resolved_ids:
             self.facade.resolve_reviews(resolved_ids, status="resolved")
         if ignored_ids:
             self.facade.resolve_reviews(ignored_ids, status="ignored")
+        if failed_imports:
+            preview = "\n".join(f"{rid}: {reason}" for rid, reason in failed_imports[:8])
+            QMessageBox.warning(
+                self,
+                "审查导入",
+                f"有 {len(failed_imports)} 项导入失败，已保留为待审查。\n{preview}",
+            )
         self.reload_reviews()
         self.review_changed.emit()
 
-    def _cancel_song_group(self, parent: QTreeWidgetItem) -> None:
-        ids = self._review_ids_for_group(parent)
+    def _cancel_song_group(self, group: dict) -> None:
+        ids = self._review_ids_for_group(group)
         if not ids:
             return
         self.facade.resolve_reviews(ids, status="ignored")
         self.reload_reviews()
         self.review_changed.emit()
 
-    def _apply_lyrics_preset_same_for_group(self, parent: QTreeWidgetItem) -> None:
+    def _apply_lyrics_preset_same_for_group(self, group: dict) -> None:
         rows: list[dict] = []
-        items: list[QTreeWidgetItem] = []
-        for child in self._iter_group_leaf_items(parent):
-            child.setCheckState(0, Qt.CheckState.Unchecked)
-            row = child.data(0, Qt.ItemDataRole.UserRole) or {}
+        row_controls: list[dict] = []
+        entries = group.get("rows") if isinstance(group, dict) else []
+        for row_ctrl in entries if isinstance(entries, list) else []:
+            row = row_ctrl.get("row") if isinstance(row_ctrl, dict) else {}
+            if not isinstance(row, dict):
+                continue
             rows.append(dict(row))
-            items.append(child)
-        self._apply_default_lyrics_checks(rows, items)
+            row_controls.append(row_ctrl)
+        self._apply_default_lyrics_checks(rows, row_controls)
 
-    def _apply_lyrics_preset_diff_for_group(self, parent: QTreeWidgetItem) -> None:
-        for child in self._iter_group_leaf_items(parent):
-            child.setCheckState(0, Qt.CheckState.Checked)
+    def _apply_lyrics_preset_diff_for_group(self, group: dict) -> None:
+        entries = group.get("rows") if isinstance(group, dict) else []
+        for row_ctrl in entries if isinstance(entries, list) else []:
+            checkbox = row_ctrl.get("checkbox") if isinstance(row_ctrl, dict) else None
+            if isinstance(checkbox, QCheckBox):
+                checkbox.setChecked(True)
 
-    def _save_lyrics_group(self, parent: QTreeWidgetItem) -> None:
+    def _invert_lyrics_group(self, group: dict) -> None:
+        entries = group.get("rows") if isinstance(group, dict) else []
+        for row_ctrl in entries if isinstance(entries, list) else []:
+            checkbox = row_ctrl.get("checkbox") if isinstance(row_ctrl, dict) else None
+            if isinstance(checkbox, QCheckBox):
+                checkbox.setChecked(not checkbox.isChecked())
+
+    def _save_lyrics_group(self, group: dict) -> None:
         status_by_review: dict[str, bool] = {}
         restore_lyrics_ids: set[str] = set()
-        for child in self._iter_group_leaf_items(parent):
-            row = child.data(0, Qt.ItemDataRole.UserRole) or {}
+        entries = group.get("rows") if isinstance(group, dict) else []
+        for row_ctrl in entries if isinstance(entries, list) else []:
+            row = row_ctrl.get("row") if isinstance(row_ctrl, dict) else {}
+            if not isinstance(row, dict):
+                continue
             rid = str(row.get("review_id", "") or "")
             if not rid:
                 continue
-            checked = child.checkState(0) == Qt.CheckState.Checked
+            checkbox = row_ctrl.get("checkbox") if isinstance(row_ctrl, dict) else None
+            checked = bool(checkbox.isChecked()) if isinstance(checkbox, QCheckBox) else False
             status_by_review[rid] = bool(status_by_review.get(rid, False) or checked)
             if checked:
                 restore_id = str(row.get("restore_lyrics_id", "") or "")
@@ -1100,8 +1735,8 @@ class ReviewPage(QWidget):
         self.reload_reviews()
         self.review_changed.emit()
 
-    def _cancel_lyrics_group(self, parent: QTreeWidgetItem) -> None:
-        ids = self._review_ids_for_group(parent)
+    def _cancel_lyrics_group(self, group: dict) -> None:
+        ids = self._review_ids_for_group(group)
         if not ids:
             return
         self.facade.resolve_reviews(ids, status="ignored")

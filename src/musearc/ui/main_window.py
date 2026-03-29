@@ -30,6 +30,7 @@ from musearc.ui.main_window_components import (
     _apply_button_scale,
     _history_action_label,
 )
+from musearc.ui.lrclib_window import LrcLibFetchWindow
 from musearc.ui.review_page import ReviewPage
 from musearc.ui.settings_page import SettingsPage
 
@@ -49,6 +50,7 @@ class MainWindow(QMainWindow):
         self.facade = MuseArcFacade(library_path)
         self.setWindowTitle("MuseArc")
         self.resize(1720, 980)
+        self.setStyleSheet("QCheckBox::indicator{width:26px;height:26px;}")
 
         root = QWidget(self)
         self.setCentralWidget(root)
@@ -139,6 +141,7 @@ class MainWindow(QMainWindow):
         self._apply_button_scale_from_config()
         self._configure_autosave_timer()
         self._refresh_action_history()
+        self._tool_windows: list[QWidget] = []
 
     def _build_menu(self) -> None:
         menu_file = self.menuBar().addMenu("文件")
@@ -154,6 +157,20 @@ class MainWindow(QMainWindow):
         action_refresh = QAction("刷新当前页面", self)
         action_refresh.triggered.connect(self._refresh_current_page)
         menu_view.addAction(action_refresh)
+
+        menu_more = self.menuBar().addMenu("更多")
+        action_lrclib = QAction("补全歌词", self)
+        action_lrclib.triggered.connect(self._open_lrclib_window)
+        menu_more.addAction(action_lrclib)
+
+    def _open_lrclib_window(self) -> None:
+        window = LrcLibFetchWindow(self.facade)
+        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        window.show()
+        self._tool_windows.append(window)
+        window.destroyed.connect(
+            lambda *_args, w=window: self._tool_windows.remove(w) if w in self._tool_windows else None
+        )
 
     def _save_now(self) -> None:
         self.facade.save_now()

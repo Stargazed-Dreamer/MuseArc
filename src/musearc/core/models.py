@@ -20,6 +20,9 @@ class ProbeInfo:
     artist: str | None = None
     album: str | None = None
     format_name: str | None = None
+    cover_width: int | None = None
+    cover_height: int | None = None
+    cover_bytes: int | None = None
 
 
 @dataclass(slots=True)
@@ -63,6 +66,7 @@ class TrackInsert:
     fingerprint_digest: str
     fingerprint_payload: str
     imported_at: datetime
+    ext_json: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

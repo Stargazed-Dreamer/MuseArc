@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
+import requests
+
 from musearc.app.action_log import append_action_log, read_action_logs
+from musearc.core.hashing import sha1_text
 from musearc.core.ids import new_id
+from musearc.core.paths import ensure_parent, shard_relpath
 from musearc.services.exporter import ExportService
 from musearc.services.import_runtime import ImportControl, list_resume_states
 from musearc.services.importer import ImportService
@@ -77,6 +82,131 @@ class MuseArcFacade:
             from musearc.infra.db.repositories import LibraryRepository
 
             return LibraryOpsService(LibraryRepository(conn)).list_tracks(limit)
+
+    def fetch_lrclib_lyrics_for_tracks(
+        self,
+        track_ids: list[str],
+        *,
+        replace_existing_links: bool = False,
+        progress_callback=None,
+    ) -> dict:
+        ids = [str(v) for v in track_ids if str(v)]
+        summary = {"total": len(ids), "success": 0, "skipped": 0, "failed": 0, "rows": []}
+        if not ids:
+            return summary
+
+        with self.ctx.db.session() as conn:
+            from musearc.core.models import LyricsInsert
+            from musearc.infra.db.repositories import LibraryRepository
+
+            repo = LibraryRepository(conn)
+            tracks = {str(r.get("track_id", "")): r for r in repo.get_tracks_by_ids(ids)}
+            for track_id in ids:
+                row = tracks.get(track_id) or {}
+                file_name = str(row.get("file_name", "") or "")
+                title = str(row.get("title", "") or "").strip()
+                artist = str(row.get("artist", "") or "").strip()
+                album = str(row.get("album", "") or "").strip()
+                duration = int(float(row.get("duration_sec", 0) or 0))
+                reason = ""
+                status = "failed"
+
+                if not title or not artist or not album or duration <= 0:
+                    status = "skipped"
+                    reason = "缺少 API 所需字段"
+                else:
+                    try:
+                        response = requests.get(
+                            "https://lrclib.net/api/get",
+                            params={
+                                "track_name": title,
+                                "artist_name": artist,
+                                "album_name": album,
+                                "duration": duration,
+                            },
+                            headers={"User-Agent": "MuseArc/0.1 (+https://example.invalid)"},
+                            timeout=20,
+                        )
+                    except Exception as exc:
+                        status = "failed"
+                        reason = f"请求失败: {exc}"
+                    else:
+                        if response.status_code == 404:
+                            status = "skipped"
+                            reason = "未匹配到歌词"
+                        elif response.status_code != 200:
+                            status = "failed"
+                            reason = f"HTTP {response.status_code}"
+                        else:
+                            payload = response.json() if response.content else {}
+                            synced = str(payload.get("syncedLyrics", "") or "").strip()
+                            plain = str(payload.get("plainLyrics", "") or "").strip()
+                            instrumental = bool(payload.get("instrumental", False))
+                            text = synced or plain
+                            if instrumental or not text:
+                                status = "skipped"
+                                reason = "纯音乐或歌词为空"
+                            else:
+                                text_hash = sha1_text(text)
+                                existing = repo.get_lyrics_by_text_hash(text_hash)
+                                if existing:
+                                    lyrics_id = str(existing.get("lyrics_id", "") or "")
+                                    if existing.get("deleted_at"):
+                                        repo.restore_lyrics([lyrics_id])
+                                else:
+                                    lyrics_id = new_id("lrc")
+                                    lyrics_rel = shard_relpath("data/lyrics", lyrics_id, "lrc")
+                                    lyrics_abs = self.ctx.layout.root / Path(lyrics_rel)
+                                    ensure_parent(lyrics_abs)
+                                    lyrics_abs.write_text(text, encoding="utf-8")
+                                    repo.insert_lyrics(
+                                        LyricsInsert(
+                                            lyrics_id=lyrics_id,
+                                            source_relpath=f"lrclib/{track_id}.lrc",
+                                            storage_relpath=lyrics_rel,
+                                            text_hash=text_hash,
+                                            raw_encoding="utf-8",
+                                            lyrics_title=title,
+                                            lyrics_artist=artist,
+                                            lyrics_album=album,
+                                            lyrics_author="lrclib",
+                                            line_count=len([ln for ln in text.splitlines() if ln.strip()]),
+                                            imported_at=datetime.now(timezone.utc),
+                                        )
+                                    )
+
+                                if replace_existing_links or not repo.get_primary_lyrics_id_for_track(track_id):
+                                    repo.set_primary_lyrics_for_track(track_id, lyrics_id)
+                                repo.update_track_tag_values([track_id], "歌词来自lrclib", "是")
+                                status = "success"
+                                reason = "已导入并绑定"
+
+                if status == "success":
+                    summary["success"] += 1
+                elif status == "skipped":
+                    summary["skipped"] += 1
+                else:
+                    summary["failed"] += 1
+                summary["rows"].append(
+                    {
+                        "track_id": track_id,
+                        "file_name": file_name,
+                        "status": status,
+                        "reason": reason,
+                    }
+                )
+                if progress_callback is not None:
+                    try:
+                        progress_callback(summary["rows"][-1], len(summary["rows"]), len(ids))
+                    except Exception:
+                        pass
+
+        if summary["success"] > 0:
+            self._redo_actions.clear()
+        self._log(
+            f"lrclib_fetch total={summary['total']} success={summary['success']} skipped={summary['skipped']} failed={summary['failed']}"
+        )
+        return summary
 
     def export(
         self,
@@ -158,6 +288,31 @@ class MuseArcFacade:
             self._log(f"resolve_reviews count={count} status={status}")
         return count
 
+    def import_track_from_review(
+        self,
+        source_path: str,
+        *,
+        existing_track_id: str | None = None,
+        replace_existing: bool = True,
+    ) -> dict:
+        source = Path(str(source_path or "")).expanduser().resolve()
+        with self.ctx.db.session() as conn:
+            from musearc.infra.db.repositories import LibraryRepository
+
+            repo = LibraryRepository(conn)
+            result = ImportService(self.ctx.layout.root, self.ctx.runtime_config).import_track_for_duplicate_review(
+                repo,
+                source,
+                existing_track_id=existing_track_id,
+                replace_existing=replace_existing,
+            )
+        if str(result.get("status", "")) == "imported":
+            self._redo_actions.clear()
+            self._log(
+                f"import_track_from_review source={source} track={result.get('track_id','')} replaced={result.get('replaced_track_id','')}"
+            )
+        return result
+
     def delete_tracks(self, track_ids: list[str], *, mode: str = "move_linked_lyrics") -> int:
         delete_mode = mode if mode in {"move_linked_lyrics", "unlink_only"} else "move_linked_lyrics"
         count = 0
@@ -210,6 +365,30 @@ class MuseArcFacade:
                 self._append_undo(repo, "restore_tracks", {"track_ids": track_ids})
                 self._log(f"restore_tracks count={count}")
             return count
+
+    def purge_deleted_track_files(self, track_ids: list[str]) -> int:
+        ids = [str(v) for v in track_ids if str(v)]
+        if not ids:
+            return 0
+        deleted_rows = {str(r.get("track_id", "")): r for r in self.list_deleted_tracks(limit=2_000_000)}
+        removed = 0
+        for tid in ids:
+            row = deleted_rows.get(tid) or {}
+            rel = str(row.get("storage_relpath", "") or "")
+            if not rel:
+                continue
+            target = self.ctx.layout.root / rel
+            if not target.exists():
+                continue
+            try:
+                target.unlink(missing_ok=True)
+                removed += 1
+            except Exception:
+                continue
+        if removed > 0:
+            self._redo_actions.clear()
+            self._log(f"purge_deleted_track_files count={removed}")
+        return removed
 
     def update_tracks_fields(self, track_ids: list[str], fields: dict[str, object]) -> int:
         with self.ctx.db.session() as conn:

@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from musearc.app.facade import MuseArcFacade
 from musearc.ui.selection import SelectionController, SelectionMode
-from musearc.ui.table_models import DictTableModel
+from musearc.ui.table_models import ColumnDef, DictTableModel
 from musearc.ui.track_table_model import TrackTableModel
 from musearc.ui.main_window_helpers import _apply_button_scale
 
@@ -80,6 +80,14 @@ def _safe_int(value, default: int = 0) -> int:
         return int(value or 0)
     except Exception:
         return default
+
+
+def _marker_for_state(state: str) -> str:
+    if state == "asc":
+        return "↑"
+    if state == "desc":
+        return "↓"
+    return "·"
 
 
 class TrackTableView(QTableView):
@@ -388,17 +396,20 @@ class TrackGridWidget(QWidget):
         root = QVBoxLayout(self)
 
         ctrl = QHBoxLayout()
-        ctrl.addWidget(QLabel("分组模式"))
+        self.lbl_group_mode = QLabel("分组模式")
 
         self.combo_group = QComboBox()
         self.combo_group.addItem("不分组", "none")
         self.chk_multi = QCheckBox("多选模式")
         self.chk_edit_mode = QCheckBox("编辑模式")
+        self.btn_invert = QPushButton("反选")
         self.btn_save_selection = QPushButton("保存选中")
         self.btn_apply_snapshot = QPushButton("应用选中记录")
         self.snapshot_combo = QComboBox()
         self.snapshot_combo.setMinimumWidth(170)
 
+        ctrl.addWidget(self.btn_invert)
+        ctrl.addWidget(self.lbl_group_mode)
         ctrl.addWidget(self.combo_group)
         ctrl.addWidget(self.chk_multi)
         ctrl.addWidget(self.chk_edit_mode)
@@ -428,6 +439,7 @@ class TrackGridWidget(QWidget):
         self.combo_group.currentIndexChanged.connect(self._on_group_changed)
         self.chk_multi.toggled.connect(self._on_toggle_multi)
         self.chk_edit_mode.toggled.connect(self._on_toggle_edit_mode)
+        self.btn_invert.clicked.connect(self._on_invert_selection)
         self.btn_save_selection.clicked.connect(self._on_save_snapshot)
         self.btn_apply_snapshot.clicked.connect(self._on_apply_snapshot)
         self.model.track_field_edited.connect(self._on_model_track_field_edited)
@@ -450,6 +462,7 @@ class TrackGridWidget(QWidget):
         self.refresh_tag_fields()
 
     def set_button_scale(self, scale: float) -> None:
+        _apply_button_scale(self.btn_invert, scale)
         _apply_button_scale(self.btn_save_selection, scale)
         _apply_button_scale(self.btn_apply_snapshot, scale)
 
@@ -611,6 +624,25 @@ class TrackGridWidget(QWidget):
     def _on_toggle_edit_mode(self, checked: bool) -> None:
         self.table.set_edit_mode(bool(checked))
 
+    def _on_invert_selection(self) -> None:
+        visible_track_rows: set[int] = set()
+        for idx, row_obj in enumerate(self.model.display_rows):
+            if row_obj.get("kind") == "track":
+                visible_track_rows.add(idx)
+        if not visible_track_rows:
+            return
+        current = {r for r in self.controller.selected_rows if r in visible_track_rows}
+        self.controller.selected_rows = visible_track_rows.difference(current)
+        if self.controller.selected_rows:
+            focus = min(self.controller.selected_rows)
+            self.controller.focus_row = focus
+            self.controller.anchor_row = focus
+        else:
+            self.controller.focus_row = None
+            self.controller.anchor_row = None
+        self.table.apply_controller_selection()
+        self._refresh_status()
+
     def _on_save_snapshot(self) -> None:
         self.controller.save_snapshot()
         self.refresh_snapshot_combo()
@@ -643,10 +675,7 @@ class TrackGridWidget(QWidget):
         if not rows:
             return
 
-        if self.controller.mode == SelectionMode.MULTI:
-            self.controller.selected_rows.update(rows)
-        else:
-            self.controller.selected_rows = set(rows)
+        self.controller.selected_rows = set(rows)
         self.controller.anchor_row = min(rows)
         self.controller.focus_row = min(rows)
         self.table.apply_controller_selection()
@@ -729,6 +758,23 @@ class LyricsTableModel(DictTableModel):
     lyrics_field_edited = Signal(str, str, object)
 
     _EDITABLE = {"file_name", "lyrics_title", "lyrics_artist", "lyrics_album", "lyrics_author"}
+
+    def __init__(self, columns: list[ColumnDef], parent=None):
+        super().__init__(columns, parent)
+        self._sort_state_map: dict[str, str] = {}
+
+    def set_header_sort_states(self, state_map: dict[str, str]) -> None:
+        self._sort_state_map = dict(state_map)
+        if self.columns:
+            self.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, len(self.columns) - 1)
+
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+            if 0 <= section < len(self.columns):
+                col = self.columns[section]
+                marker = _marker_for_state(self._sort_state_map.get(col.key, "off"))
+                return f"{col.title} {marker}"
+        return super().headerData(section, orientation, role)
 
     def flags(self, index: QModelIndex):
         if not index.isValid():

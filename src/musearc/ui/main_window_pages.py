@@ -2,15 +2,17 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QModelIndex, Qt, Signal
+from PySide6.QtCore import QEvent, QItemSelectionModel, QModelIndex, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QKeyEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -247,7 +249,7 @@ class TracksPage(QWidget):
                 self.facade.update_tracks_fields([track_id], {key: value})
         except Exception as exc:
             QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
-            self.reload_tracks_from_db()
+            QTimer.singleShot(0, self.reload_tracks_from_db)
             return
         for row in self.all_rows:
             if row.get("track_id") == track_id:
@@ -640,11 +642,10 @@ class PlaylistPage(QWidget):
                 self.facade.update_playlist_entries(self.current_playlist_id, {track_id: parsed})
             except Exception as exc:
                 QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
-                self.reload_playlist_tracks()
+                QTimer.singleShot(0, self.reload_playlist_tracks)
                 return
-            self.reload_playlist_tracks()
             self.grid.select_track_ids([track_id])
-            self.library_changed.emit()
+            QTimer.singleShot(0, self.library_changed.emit)
             return
         try:
             if key.startswith("tag:"):
@@ -654,9 +655,9 @@ class PlaylistPage(QWidget):
                 self.facade.update_tracks_fields([track_id], {key: value})
         except Exception as exc:
             QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
-            self.reload_playlist_tracks()
+            QTimer.singleShot(0, self.reload_playlist_tracks)
             return
-        self.library_changed.emit()
+        QTimer.singleShot(0, self.library_changed.emit)
 
     def _show_context_menu(self, pos, tracks: list[dict]) -> None:
         if not self.current_playlist_id:
@@ -991,9 +992,9 @@ class FullScanPage(QWidget):
                 self.facade.update_tracks_fields([track_id], {key: value})
         except Exception as exc:
             QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
-            self.on_work_changed()
+            QTimer.singleShot(0, self.on_work_changed)
             return
-        self.library_changed.emit()
+        QTimer.singleShot(0, self.library_changed.emit)
 
     def _show_context_menu(self, pos, tracks: list[dict]) -> None:
         track_ids = [str(t.get("track_id", "")) for t in tracks if t.get("track_id")]
@@ -1081,7 +1082,10 @@ class TrashPage(QWidget):
         root = QVBoxLayout(self)
         row = QHBoxLayout()
         self.btn_restore = QPushButton("恢复选中")
+        self.btn_delete_file = QPushButton("删除歌曲文件")
+        self.btn_delete_file.setStyleSheet("background-color:#b3261e;color:white;")
         row.addWidget(self.btn_restore)
+        row.addWidget(self.btn_delete_file)
         row.addStretch(1)
 
         self.grid = TrackGridWidget(self.facade)
@@ -1090,6 +1094,7 @@ class TrashPage(QWidget):
         root.addWidget(self.grid, 1)
 
         self.btn_restore.clicked.connect(self.restore_selected)
+        self.btn_delete_file.clicked.connect(self.delete_selected_files)
         self.grid.track_field_edited.connect(self.on_track_field_edited)
         self.grid.context_menu_requested.connect(self._show_context_menu)
 
@@ -1097,6 +1102,7 @@ class TrashPage(QWidget):
 
     def apply_button_scale(self, scale: float) -> None:
         _apply_button_scale(self.btn_restore, scale)
+        _apply_button_scale(self.btn_delete_file, scale)
         self.grid.set_button_scale(scale)
 
     def set_facade(self, facade: MuseArcFacade) -> None:
@@ -1121,6 +1127,17 @@ class TrashPage(QWidget):
         self.grid.set_status(f"已恢复 {restored} 条")
         self.library_changed.emit()
 
+    def delete_selected_files(self) -> None:
+        track_ids = self.grid.selected_track_ids()
+        if not track_ids:
+            return
+        answer = QMessageBox.question(self, "删除歌曲文件", f"仅删除 {len(track_ids)} 条对应文件（保留元数据）？")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        removed = self.facade.purge_deleted_track_files(track_ids)
+        self.grid.set_status(f"已删除文件 {removed} 个（元数据保留）")
+        self.reload_trash()
+
     def on_track_field_edited(self, track_id: str, key: str, value) -> None:
         if not track_id or key == "custom_order":
             return
@@ -1132,7 +1149,7 @@ class TrashPage(QWidget):
                 self.facade.update_tracks_fields([track_id], {key: value})
         except Exception as exc:
             QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
-            self.reload_trash()
+            QTimer.singleShot(0, self.reload_trash)
             return
 
     def _show_context_menu(self, pos, tracks: list[dict]) -> None:
@@ -1141,6 +1158,7 @@ class TrashPage(QWidget):
             return
         menu = QMenu(self)
         action_restore = menu.addAction("恢复")
+        action_delete_file = menu.addAction("删除歌曲文件")
         action_reveal = menu.addAction("使用文件管理器查看")
         action_copy = menu.addAction("复制行数据")
         action_detail = menu.addAction("查看详情")
@@ -1149,6 +1167,9 @@ class TrashPage(QWidget):
             return
         if chosen == action_restore:
             self.restore_selected()
+            return
+        if chosen == action_delete_file:
+            self.delete_selected_files()
             return
         if chosen == action_reveal:
             first = tracks[0] if tracks else {}
@@ -1408,12 +1429,13 @@ class TagManagementPage(QWidget):
                 self.facade.update_tracks_fields([track_id], {key: value})
         except Exception as exc:
             QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
-            self._reload_tracks_for_current_tag()
-            self.reload_tags()
+            QTimer.singleShot(0, self._reload_tracks_for_current_tag)
+            QTimer.singleShot(0, self.reload_tags)
             return
-        self._reload_tracks_for_current_tag()
-        self.reload_tags()
-        self.library_changed.emit()
+        if key == f"tag:{self.current_tag_name or ''}":
+            QTimer.singleShot(0, self._reload_tracks_for_current_tag)
+            QTimer.singleShot(0, self.reload_tags)
+        QTimer.singleShot(0, self.library_changed.emit)
 
     def _show_context_menu(self, pos, tracks: list[dict]) -> None:
         track_ids = [str(t.get("track_id", "")) for t in tracks if t.get("track_id")]
@@ -1497,6 +1519,7 @@ class LyricsManagementPage(QWidget):
         super().__init__()
         self.facade = facade
         self._all_rows: list[dict] = []
+        self._sort_states: dict[str, str] = {}
 
         root = QVBoxLayout(self)
 
@@ -1504,6 +1527,10 @@ class LyricsManagementPage(QWidget):
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索 文件名/标题/艺术家/专辑/歌词作者")
         self.btn_search = QPushButton("搜索")
+        row_top.addWidget(self.search_input, 1)
+        row_top.addWidget(self.btn_search)
+
+        row_ctrl = QHBoxLayout()
         self.combo_group = QComboBox()
         self.combo_group.addItem("不分组", "none")
         self.combo_group.addItem("文件名", "file_name")
@@ -1512,27 +1539,31 @@ class LyricsManagementPage(QWidget):
         self.combo_group.addItem("专辑", "lyrics_album")
         self.combo_group.addItem("歌词文件作者", "lyrics_author")
         self.combo_group.addItem("对应歌曲", "mapped_track")
+        self.btn_invert = QPushButton("反选")
         self.chk_multi = QCheckBox("多选模式")
         self.chk_multi.setChecked(True)
         self.chk_edit_mode = QCheckBox("编辑模式")
-        self.chk_preview = QCheckBox("预览歌词")
-        row_top.addWidget(self.search_input, 1)
-        row_top.addWidget(self.btn_search)
-        row_top.addWidget(QLabel("分组"))
-        row_top.addWidget(self.combo_group)
-        row_top.addWidget(self.chk_multi)
-        row_top.addWidget(self.chk_edit_mode)
-        row_top.addWidget(self.chk_preview)
+        row_ctrl.addWidget(self.btn_invert)
+        row_ctrl.addWidget(QLabel("分组"))
+        row_ctrl.addWidget(self.combo_group)
+        row_ctrl.addWidget(self.chk_multi)
+        row_ctrl.addWidget(self.chk_edit_mode)
+        row_ctrl.addStretch(1)
 
         row_ops = QHBoxLayout()
         self.btn_map_track = QPushButton("映射到歌曲")
         self.btn_edit_author = QPushButton("批量改作者")
         self.btn_delete = QPushButton("删除歌词")
         self.btn_delete.setStyleSheet("background-color:#b3261e;color:white;")
+        self.chk_preview = QCheckBox("预览歌词")
         row_ops.addWidget(self.btn_map_track)
         row_ops.addWidget(self.btn_edit_author)
         row_ops.addWidget(self.btn_delete)
         row_ops.addStretch(1)
+
+        row_preview = QHBoxLayout()
+        row_preview.addStretch(1)
+        row_preview.addWidget(self.chk_preview)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -1558,7 +1589,9 @@ class LyricsManagementPage(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
-        self.table.setSortingEnabled(True)
+        self.table.setSortingEnabled(False)
+        self.table.horizontalHeader().setSectionsMovable(True)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.horizontalHeader().setStretchLastSection(True)
         _install_copy_support(self.table)
         left_layout.addWidget(self.table)
@@ -1574,10 +1607,13 @@ class LyricsManagementPage(QWidget):
         self.preview.hide()
 
         root.addLayout(row_top)
+        root.addLayout(row_ctrl)
         root.addLayout(row_ops)
+        root.addLayout(row_preview)
         root.addWidget(self.splitter, 1)
 
         self.btn_search.clicked.connect(self.apply_filter)
+        self.btn_invert.clicked.connect(self._invert_selection)
         self.search_input.returnPressed.connect(self.apply_filter)
         self.combo_group.currentIndexChanged.connect(self.apply_filter)
         self.chk_multi.toggled.connect(self._on_toggle_multi)
@@ -1588,6 +1624,8 @@ class LyricsManagementPage(QWidget):
         self.chk_preview.toggled.connect(self._on_toggle_preview)
         self.table.clicked.connect(self._on_click_cell)
         self.table.doubleClicked.connect(self._on_double_click_cell)
+        self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
+        self.table.horizontalHeader().sectionMoved.connect(lambda *_args: self._sync_sort_from_header())
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
         self.table.installEventFilter(self)
@@ -1597,10 +1635,12 @@ class LyricsManagementPage(QWidget):
 
         self._on_toggle_multi(self.chk_multi.isChecked())
         self._on_toggle_edit_mode(self.chk_edit_mode.isChecked())
+        self._init_sort_states()
         self.reload_lyrics()
 
     def apply_button_scale(self, scale: float) -> None:
         _apply_button_scale(self.btn_search, scale)
+        _apply_button_scale(self.btn_invert, scale)
         _apply_button_scale(self.btn_map_track, scale)
         _apply_button_scale(self.btn_edit_author, scale)
         _apply_button_scale(self.btn_delete, scale)
@@ -1615,6 +1655,61 @@ class LyricsManagementPage(QWidget):
     def reload_lyrics(self) -> None:
         self._all_rows = self.facade.list_lyrics(limit=200_000)
         self.apply_filter()
+
+    def _init_sort_states(self) -> None:
+        keys = [str(col.key) for col in self.model.columns]
+        keep: dict[str, str] = {}
+        for key in keys:
+            keep[key] = self._sort_states.get(key, "off")
+        if all(v == "off" for v in keep.values()) and "file_name" in keep:
+            keep["file_name"] = "asc"
+        self._sort_states = keep
+        self.model.set_header_sort_states(self._sort_states)
+
+    def _next_sort_state(self, state: str) -> str:
+        if state == "asc":
+            return "desc"
+        if state == "desc":
+            return "off"
+        return "asc"
+
+    def _sync_sort_from_header(self) -> None:
+        self.model.set_header_sort_states(self._sort_states)
+        self.apply_filter()
+
+    @staticmethod
+    def _lyrics_sort_value(row: dict, key: str):
+        value = row.get(key, "")
+        if key == "line_count":
+            return _safe_int(value, 0)
+        text = str(value or "")
+        try:
+            return float(text)
+        except Exception:
+            return text.casefold()
+
+    def _sort_rows_by_rules(self, rows: list[dict]) -> list[dict]:
+        out = list(rows)
+        header = self.table.horizontalHeader()
+        logical_indexes = sorted(range(len(self.model.columns)), key=lambda i: header.visualIndex(i))
+        active: list[tuple[str, str]] = []
+        for logical in logical_indexes:
+            key = str(self.model.columns[logical].key)
+            state = self._sort_states.get(key, "off")
+            if state in {"asc", "desc"}:
+                active.append((key, state))
+        if not active:
+            active = [("file_name", "asc")]
+        for key, state in reversed(active):
+            out.sort(key=lambda r, k=key: self._lyrics_sort_value(r, k), reverse=(state == "desc"))
+        return out
+
+    def _on_header_clicked(self, logical: int) -> None:
+        if logical < 0 or logical >= len(self.model.columns):
+            return
+        key = str(self.model.columns[logical].key)
+        self._sort_states[key] = self._next_sort_state(self._sort_states.get(key, "off"))
+        self._sync_sort_from_header()
 
     def apply_filter(self) -> None:
         token = self.search_input.text().strip().casefold()
@@ -1637,18 +1732,9 @@ class LyricsManagementPage(QWidget):
                 if token in text:
                     rows.append(row)
 
-        rows.sort(
-            key=lambda r: (
-                str(r.get(group_key, "")).casefold() if group_key and group_key != "none" else "",
-                str(r.get("file_name", "")).casefold(),
-                str(r.get("lyrics_title", "")).casefold(),
-                str(r.get("lyrics_artist", "")).casefold(),
-                str(r.get("lyrics_album", "")).casefold(),
-                str(r.get("lyrics_author", "")).casefold(),
-                _safe_int(r.get("line_count", 0), 0),
-                str(r.get("mapped_track", "")).casefold(),
-            )
-        )
+        rows = self._sort_rows_by_rules(rows)
+        if group_key and group_key != "none":
+            rows.sort(key=lambda r: str(r.get(group_key, "")).casefold())
         self.model.set_rows(rows)
         self._refresh_preview()
 
@@ -1796,6 +1882,13 @@ class LyricsManagementPage(QWidget):
             return
         key = self._column_key_at(index)
         if key == "mapped_track":
+            mods = QApplication.keyboardModifiers()
+            if bool(mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)):
+                return
+            if self.chk_multi.isChecked() and self.table.selectionModel() is not None:
+                selected_count = len(self.table.selectionModel().selectedRows())
+                if selected_count > 1:
+                    return
             self._map_single_row_by_index(index)
             return
         if self.chk_edit_mode.isChecked() and key in {"file_name", "lyrics_title", "lyrics_artist", "lyrics_album", "lyrics_author"}:
@@ -1808,14 +1901,14 @@ class LyricsManagementPage(QWidget):
             self.facade.update_lyrics_fields([lyrics_id], {key: value})
         except Exception as exc:
             QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
-            self.reload_lyrics()
+            QTimer.singleShot(0, self.reload_lyrics)
             return
         for row in self._all_rows:
             if str(row.get("lyrics_id", "")) != lyrics_id:
                 continue
             row[key] = value
             break
-        self.library_changed.emit()
+        QTimer.singleShot(0, self.library_changed.emit)
 
     def _map_next_row_from(self, row_index: int) -> None:
         if row_index < 0:
@@ -1856,6 +1949,26 @@ class LyricsManagementPage(QWidget):
             else QAbstractItemView.SelectionMode.SingleSelection
         )
         self.table.setSelectionMode(mode)
+
+    def _invert_selection(self) -> None:
+        model = self.model
+        if model is None or self.table.selectionModel() is None:
+            return
+        total = model.rowCount()
+        if total <= 0:
+            return
+        sm = self.table.selectionModel()
+        selected = {idx.row() for idx in sm.selectedRows()}
+        sm.clearSelection()
+        mode = (
+            QItemSelectionModel.SelectionFlag.Select
+            | QItemSelectionModel.SelectionFlag.Rows
+        )
+        for row in range(total):
+            if row in selected:
+                continue
+            idx = model.index(row, 0)
+            sm.select(idx, mode)
 
     def _on_toggle_edit_mode(self, checked: bool) -> None:
         if checked:

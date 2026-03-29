@@ -1,86 +1,80 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
-import subprocess
+
+import av
 
 from musearc.core.models import ProbeInfo
 
 from .commands import MediaCommandError
-from .ffmpeg_tools import ffprobe_path
-
-
-def _safe_float(value, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def _safe_int(value, default: int | None = None) -> int | None:
-    try:
-        return int(value)
-    except Exception:
-        return default
 
 
 class MediaProbe:
     def probe(self, path: Path) -> ProbeInfo:
-        ffprobe = ffprobe_path()
-        cmd = [
-            str(ffprobe),
-            "-v",
-            "error",
-            "-print_format",
-            "json",
-            "-show_format",
-            "-show_streams",
-            str(path),
-        ]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        except Exception as exc:
+            with av.open(str(path)) as container:
+                audio_stream = None
+                for stream in container.streams:
+                    if stream.type == "audio":
+                        audio_stream = stream
+                        break
+                if audio_stream is None:
+                    raise MediaCommandError("no_audio_stream")
+
+                tags = {}
+                tags.update(container.metadata or {})
+                tags.update(audio_stream.metadata or {})
+
+                duration_sec = 0.0
+                if audio_stream.duration is not None and audio_stream.time_base is not None:
+                    duration_sec = float(audio_stream.duration * audio_stream.time_base)
+                elif container.duration is not None:
+                    duration_sec = float(container.duration / av.time_base)
+
+                cover_width = None
+                cover_height = None
+                cover_bytes = None
+                for stream in container.streams:
+                    if stream.type != "video":
+                        continue
+                    try:
+                        attached = bool(getattr(stream.disposition, "attached_pic", False))
+                    except Exception:
+                        attached = False
+                    if not attached:
+                        continue
+                    cover_width = stream.codec_context.width or None
+                    cover_height = stream.codec_context.height or None
+                    try:
+                        for packet in container.demux(stream):
+                            frames = packet.decode()
+                            if not frames:
+                                continue
+                            frame = frames[0]
+                            array = frame.to_ndarray(format="rgb24")
+                            cover_bytes = int(array.nbytes)
+                            break
+                    except Exception:
+                        cover_bytes = None
+                    break
+
+                return ProbeInfo(
+                    source_path=path,
+                    codec=audio_stream.codec_context.name,
+                    duration_sec=duration_sec,
+                    sample_rate=audio_stream.codec_context.sample_rate,
+                    channels=audio_stream.codec_context.channels,
+                    bit_rate=audio_stream.bit_rate or container.bit_rate,
+                    title=tags.get("title"),
+                    artist=tags.get("artist"),
+                    album=tags.get("album"),
+                    format_name=container.format.name if container.format else None,
+                    cover_width=cover_width,
+                    cover_height=cover_height,
+                    cover_bytes=cover_bytes,
+                )
+        except MediaCommandError:
+            raise
+        except Exception as exc:  # pragma: no cover - backend specific
             raise MediaCommandError(f"probe_failed:{path}:{exc}") from exc
-
-        if proc.returncode != 0:
-            err = (proc.stderr or proc.stdout or "").strip()
-            raise MediaCommandError(f"probe_failed:{path}:{err or 'ffprobe_return_nonzero'}")
-
-        try:
-            payload = json.loads(proc.stdout or "{}")
-        except Exception as exc:
-            raise MediaCommandError(f"probe_failed:{path}:invalid_json:{exc}") from exc
-
-        streams = payload.get("streams") or []
-        audio_stream = None
-        for stream in streams:
-            if isinstance(stream, dict) and str(stream.get("codec_type", "")) == "audio":
-                audio_stream = stream
-                break
-        if not isinstance(audio_stream, dict):
-            raise MediaCommandError("no_audio_stream")
-
-        fmt = payload.get("format") if isinstance(payload.get("format"), dict) else {}
-        tags = {}
-        if isinstance(fmt.get("tags"), dict):
-            tags.update(fmt.get("tags") or {})
-        if isinstance(audio_stream.get("tags"), dict):
-            tags.update(audio_stream.get("tags") or {})
-
-        duration_sec = _safe_float(audio_stream.get("duration"), 0.0)
-        if duration_sec <= 0:
-            duration_sec = _safe_float(fmt.get("duration"), 0.0)
-
-        return ProbeInfo(
-            source_path=path,
-            codec=str(audio_stream.get("codec_name", "") or ""),
-            duration_sec=duration_sec,
-            sample_rate=_safe_int(audio_stream.get("sample_rate"), None),
-            channels=_safe_int(audio_stream.get("channels"), None),
-            bit_rate=_safe_int(audio_stream.get("bit_rate"), _safe_int(fmt.get("bit_rate"), None)),
-            title=tags.get("title"),
-            artist=tags.get("artist"),
-            album=tags.get("album"),
-            format_name=str(fmt.get("format_name", "") or "") or None,
-        )
 

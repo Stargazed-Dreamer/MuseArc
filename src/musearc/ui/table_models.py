@@ -51,3 +51,23 @@ class DictTableModel(QAbstractTableModel):
         if 0 <= row < len(self.rows):
             return self.rows[row]
         return None
+
+    def sort(self, column: int, order: Qt.SortOrder = Qt.SortOrder.AscendingOrder) -> None:
+        if column < 0 or column >= len(self.columns):
+            return
+        key = self.columns[column].key
+        reverse = order == Qt.SortOrder.DescendingOrder
+
+        def _sort_key(row: dict):
+            value = row.get(key, "")
+            if isinstance(value, (int, float)):
+                return (0, float(value))
+            text = str(value or "")
+            try:
+                return (0, float(text))
+            except Exception:
+                return (1, text.casefold())
+
+        self.layoutAboutToBeChanged.emit()
+        self.rows.sort(key=_sort_key, reverse=reverse)
+        self.layoutChanged.emit()
