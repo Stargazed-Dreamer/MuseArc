@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QInputDialog, QLineEdit, QMenu, QMessageBox, QPushButton, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QInputDialog, QLineEdit, QMenu, QMessageBox, QPushButton, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtGui import QAction
 
 from musearc.app.facade import FAVORITES_PLAYLIST_ID, MuseArcFacade
 from musearc.ui.track_grid import TrackGridWidget, _copy_selected_cells

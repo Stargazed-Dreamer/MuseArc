@@ -3,11 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QItemSelectionModel, QModelIndex, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QKeyEvent
-from PySide6.QtWidgets import QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTableView, QVBoxLayout, QWidget
+from PySide6.QtGui import QKeyEvent
+from PySide6.QtWidgets import QApplication, QAbstractItemView, QCheckBox, QComboBox, QDialog, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTableView, QVBoxLayout, QWidget
 
 from musearc.app.facade import MuseArcFacade
-from musearc.ui.table_models import ColumnDef, DictTableModel
+from musearc.ui.table_models import ColumnDef
 from musearc.ui.track_grid import LyricsTableModel, _copy_selected_cells, _install_copy_support, _safe_int
 from musearc.ui.main_window_helpers import TrackPickerDialog, _apply_button_scale, _reveal_in_file_manager
 

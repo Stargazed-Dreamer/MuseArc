@@ -3,8 +3,7 @@
 from pathlib import Path
 import subprocess
 
-from PySide6.QtCore import QEvent, QItemSelectionModel, QModelIndex, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QKeyEvent, QKeySequence, QMouseEvent, QShortcut
+from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -12,25 +11,15 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
     QHeaderView,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
-    QMainWindow,
     QMenu,
     QMessageBox,
-    QPlainTextEdit,
-    QProgressBar,
     QPushButton,
-    QSpinBox,
-    QSplitter,
-    QStackedWidget,
     QTableView,
     QTreeWidget,
     QTreeWidgetItem,
@@ -38,15 +27,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from musearc.app.facade import FAVORITES_PLAYLIST_ID, MuseArcFacade
+from musearc.app.facade import MuseArcFacade
 from musearc.config.store import save_runtime_config
-from musearc.ui.import_worker import ImportWorker
-from musearc.ui.import_management_page import ImportManagementPage
-from musearc.ui.settings_page import SettingsPage
-from musearc.ui.review_page import ReviewPage
-from musearc.ui.selection import SelectionController, SelectionMode
 from musearc.ui.table_models import ColumnDef, DictTableModel
-from musearc.ui.track_table_model import TrackTableModel
 
 
 def _apply_button_scale(button: QPushButton, scale: float) -> None:

@@ -1,20 +1,10 @@
 from __future__ import annotations
 
-import json
-from collections.abc import Iterable
-from dataclasses import asdict
-from datetime import datetime
-from pathlib import Path
 
-from musearc.core.models import LyricsInsert, ReviewItem, TrackInsert, UndoAction
 from musearc.infra.db.repositories_common import (
-    DEFAULT_TAG_FIELD,
-    DEFAULT_TAG_FIELDS,
     FAVORITES_PLAYLIST_ID,
     FAVORITES_PLAYLIST_NAME,
-    _normalize_tags,
     _placeholders,
-    _safe_json_loads,
     _utc_now_iso,
 )
 

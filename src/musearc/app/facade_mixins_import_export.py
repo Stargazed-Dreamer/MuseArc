@@ -7,7 +7,6 @@ from pathlib import Path
 
 import requests
 
-from musearc.app.action_log import append_action_log, read_action_logs
 from musearc.core.hashing import sha1_text
 from musearc.core.ids import new_id
 from musearc.core.paths import ensure_parent, shard_relpath

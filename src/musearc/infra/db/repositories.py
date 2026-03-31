@@ -3,23 +3,11 @@ from __future__ import annotations
 """Repository entry class."""
 
 import json
-from collections.abc import Iterable
-from dataclasses import asdict
-from datetime import datetime, timezone
-from pathlib import Path
 
-from musearc.core.models import LyricsInsert, ReviewItem, TrackInsert, UndoAction
 
 
 from musearc.infra.db.repositories_common import (
-    DEFAULT_TAG_FIELD,
-    DEFAULT_TAG_FIELDS,
-    FAVORITES_PLAYLIST_ID,
-    FAVORITES_PLAYLIST_NAME,
     _normalize_tags,
-    _placeholders,
-    _safe_json_loads,
-    _utc_now_iso,
 )
 from musearc.infra.db.repositories_mixins_meta_import import RepositoryMetaImportMixin
 from musearc.infra.db.repositories_mixins_tracks_lyrics import RepositoryTracksLyricsMixin

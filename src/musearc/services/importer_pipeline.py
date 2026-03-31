@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable
 
 from musearc.core.enums import DuplicateDecision, FileHealth, ReviewKind
+from musearc.core.hashing import sha1_text
 from musearc.core.ids import new_id
 from musearc.core.models import ImportProgress, ImportReport, LyricsInsert, ReviewItem, TrackInsert
 from musearc.core.paths import ensure_parent, shard_relpath

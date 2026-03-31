@@ -4,6 +4,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QHBoxLayout, QInputDialog, QLabel, QMenu, QMessageBox, QPushButton, QSplitter, QTableView, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget, QAbstractItemView, QComboBox
+from PySide6.QtGui import QAction
 
 from musearc.app.facade import FAVORITES_PLAYLIST_ID, MuseArcFacade
 from musearc.ui.table_models import ColumnDef, DictTableModel

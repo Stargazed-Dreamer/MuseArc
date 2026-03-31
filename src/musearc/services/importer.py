@@ -10,23 +10,20 @@
 import json
 import hashlib
 import html
-import difflib
 import re
 import shutil
-import time
-from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
 from musearc.config.models import RuntimeConfig
-from musearc.core.enums import DuplicateDecision, FileHealth, ReviewKind
-from musearc.core.hashing import sha1_text, sha256_file
+from musearc.core.enums import FileHealth
+from musearc.core.hashing import sha256_file
 from musearc.core.ids import new_id
-from musearc.core.models import Fingerprint, ImportProgress, ImportReport, LyricsInsert, ProbeInfo, ReviewItem, TrackInsert
+from musearc.core.models import Fingerprint, ImportProgress, ImportReport, ProbeInfo, ReviewItem, TrackInsert
 from musearc.core.paths import ensure_parent, shard_relpath
-from musearc.core.text_normalize import lrc_visible_lines, normalize_text
+from musearc.core.text_normalize import normalize_text
 from musearc.infra.db.repositories import LibraryRepository
 from musearc.infra.llm.client import LmStudioMatcher
 from musearc.infra.media.audio_io import decode_audio
@@ -35,9 +32,8 @@ from musearc.infra.media.fingerprint import AcousticFingerprintEngine
 from musearc.infra.media.prober import MediaProbe
 from musearc.infra.media.transcoder import MediaTranscoder
 from musearc.services.dedupe import DuplicateEvaluator, infer_track_kind
-from musearc.services.import_runtime import ImportControl, ResumeState, delete_resume_state, load_resume_state, resume_state_path
-from musearc.services.lyrics_match import LyricsMatcher, read_text_guess_encoding
-from musearc.services.scanner import scan_import_source
+from musearc.services.import_runtime import ImportControl, ResumeState, delete_resume_state
+from musearc.services.lyrics_match import LyricsMatcher
 
 
 @dataclass(slots=True)

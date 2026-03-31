@@ -6,33 +6,26 @@
 ??????????????????
 """
 
-from collections import defaultdict, deque
+from collections import deque
 from pathlib import Path
 import re
-import subprocess
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
-    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFrame,
-    QFormLayout,
-    QGridLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSlider,
     QSplitter,
-    QSpinBox,
     QTabWidget,
     QTableView,
     QTreeWidget,
