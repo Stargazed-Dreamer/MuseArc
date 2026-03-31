@@ -7,6 +7,7 @@ import json
 
 
 from musearc.infra.db.repositories_common import (
+    FAVORITES_PLAYLIST_ID,
     _normalize_tags,
 )
 from musearc.infra.db.repositories_mixins_meta_import import RepositoryMetaImportMixin

@@ -160,10 +160,10 @@ class MainWindowLogicMixin:
         self.page_settings.refresh_page()
 
     def _on_tags_changed(self) -> None:
-        self.page_tracks.grid.refresh_tag_fields()
-        self.page_fullscan.grid.refresh_tag_fields()
-        self.page_playlist.grid.refresh_tag_fields()
-        self.page_trash.grid.refresh_tag_fields()
+        for page in [self.page_tracks, self.page_fullscan, self.page_playlist, self.page_tags]:
+            grid = getattr(page, "grid", None)
+            if grid is not None and hasattr(grid, "refresh_tag_fields"):
+                grid.refresh_tag_fields()
         self._reload_all_pages()
 
     def _on_settings_saved(self) -> None:
