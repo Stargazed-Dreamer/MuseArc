@@ -12,9 +12,16 @@ class DbSession:
         self._conn: sqlite3.Connection | None = None
 
     def __enter__(self) -> sqlite3.Connection:
-        self._conn = sqlite3.connect(self._db_path)
+        self._conn = sqlite3.connect(self._db_path, timeout=30.0)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn.execute("PRAGMA busy_timeout=30000")
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+        except Exception:
+            # 某些只读/受限环境可能不允许设置 WAL，失败时保留默认行为。
+            pass
         return self._conn
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:

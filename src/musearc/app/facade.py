@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+"""应用外观层（Facade）。
+
+职责：
+1) 为 UI 提供稳定 API，避免 UI 直接依赖仓储/服务细节；
+2) 管理数据库会话边界与撤销日志；
+3) 编排导入、导出、统计、标签、歌单、审查等跨模块流程。
+"""
+
 import hashlib
 import json
 from datetime import datetime, timezone

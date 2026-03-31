@@ -1,5 +1,13 @@
 ﻿from __future__ import annotations
 
+"""???????
+
+???
+- ???? SQL ????????????????
+- ????? services / facade?
+- source/storage ?????????????????????
+"""
+
 import json
 from collections.abc import Iterable
 from dataclasses import asdict
@@ -372,6 +380,82 @@ class LibraryRepository:
             return None
         enriched = self._enrich_track_rows([row])
         return enriched[0] if enriched else None
+
+    def get_track_by_source_fullpath(self, source_fullpath: str, *, include_deleted: bool = True) -> dict | None:
+        key = str(source_fullpath or "").strip()
+        if not key:
+            return None
+        if include_deleted:
+            sql = """
+                SELECT track_id, file_name, title, artist, album, language_kind,
+                       storage_relpath, source_relpath, source_fullpath, source_sha256,
+                       source_ext, storage_format, imported_at, updated_at, deleted_at, ext_json
+                FROM tracks
+                WHERE LOWER(source_fullpath) = LOWER(?)
+                LIMIT 1
+            """
+            args = (key,)
+        else:
+            sql = """
+                SELECT track_id, file_name, title, artist, album, language_kind,
+                       storage_relpath, source_relpath, source_fullpath, source_sha256,
+                       source_ext, storage_format, imported_at, updated_at, deleted_at, ext_json
+                FROM tracks
+                WHERE LOWER(source_fullpath) = LOWER(?)
+                  AND deleted_at IS NULL
+                LIMIT 1
+            """
+            args = (key,)
+        row = self.conn.execute(sql, args).fetchone()
+        if not row:
+            return None
+        enriched = self._enrich_track_rows([row])
+        return enriched[0] if enriched else None
+
+    def list_track_source_fullpaths(self, *, include_deleted: bool = True) -> list[str]:
+        if include_deleted:
+            rows = self.conn.execute(
+                """
+                SELECT DISTINCT source_fullpath
+                FROM tracks
+                WHERE TRIM(source_fullpath) != ''
+                """
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """
+                SELECT DISTINCT source_fullpath
+                FROM tracks
+                WHERE deleted_at IS NULL
+                  AND TRIM(source_fullpath) != ''
+                """
+            ).fetchall()
+        return [str(row[0]) for row in rows if str(row[0]).strip()]
+
+    def list_lyrics_source_relpaths(self, *, include_deleted: bool = True) -> list[str]:
+        if include_deleted:
+            rows = self.conn.execute(
+                """
+                SELECT DISTINCT source_relpath
+                FROM lyrics
+                WHERE TRIM(source_relpath) != ''
+                """
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """
+                SELECT DISTINCT source_relpath
+                FROM lyrics
+                WHERE deleted_at IS NULL
+                  AND TRIM(source_relpath) != ''
+                """
+            ).fetchall()
+        out: list[str] = []
+        for row in rows:
+            text = str(row[0] or "").replace("\\", "/").strip()
+            if text:
+                out.append(text)
+        return out
 
     def update_tracks_fields(self, track_ids: Iterable[str], fields: dict[str, object]) -> int:
         ids = [track_id for track_id in track_ids if track_id]

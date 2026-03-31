@@ -1,5 +1,12 @@
 ﻿from __future__ import annotations
 
+"""????????
+
+???
+- ???? -> ??? -> ??? -> ??/??????
+- ?????????????????? I/O ??????
+"""
+
 import json
 import hashlib
 import html
@@ -273,6 +280,15 @@ def _safe_int(value, default: int = 0) -> int:
         return default
 
 
+def _normalize_source_path_key(value: str | Path) -> str:
+    try:
+        resolved = Path(value).expanduser().resolve()
+        text = str(resolved)
+    except Exception:
+        text = str(value or "")
+    return text.replace("\\", "/").strip().casefold()
+
+
 class ImportService:
     def __init__(self, library_root: Path, runtime_cfg: RuntimeConfig):
         self.library_root = library_root
@@ -285,6 +301,58 @@ class ImportService:
         self.duplicate_evaluator = DuplicateEvaluator(self.dependencies.fingerprint, runtime_cfg.thresholds)
         llm = LmStudioMatcher(runtime_cfg.lmstudio) if runtime_cfg.lmstudio.enabled else None
         self.lyrics_matcher = LyricsMatcher(runtime_cfg.thresholds, llm)
+
+    def _skipped_path_registry_file(self) -> Path:
+        # 历史跳过音频路径索引：用于后续导入快速排除重复来源。
+        return self.library_root / "manifests" / "imports" / "skipped_audio_paths.json"
+
+    def _load_skipped_audio_path_keys(self) -> set[str]:
+        target = self._skipped_path_registry_file()
+        if not target.exists():
+            return set()
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            return set()
+        rows = payload.get("paths") if isinstance(payload, dict) else []
+        if not isinstance(rows, list):
+            return set()
+        return {_normalize_source_path_key(v) for v in rows if str(v).strip()}
+
+    def _save_skipped_audio_path_keys(self, keys: set[str]) -> None:
+        target = self._skipped_path_registry_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "paths": sorted({str(v).strip() for v in keys if str(v).strip()}),
+        }
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _lyrics_seen_registry_file(self) -> Path:
+        # 历史已处理歌词路径索引：避免同路径重复进入导入与审查。
+        return self.library_root / "manifests" / "imports" / "seen_lyrics_paths.json"
+
+    def _load_seen_lyrics_path_keys(self) -> set[str]:
+        target = self._lyrics_seen_registry_file()
+        if not target.exists():
+            return set()
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            return set()
+        rows = payload.get("paths") if isinstance(payload, dict) else []
+        if not isinstance(rows, list):
+            return set()
+        return {_normalize_source_path_key(v) for v in rows if str(v).strip()}
+
+    def _save_seen_lyrics_path_keys(self, keys: set[str]) -> None:
+        target = self._lyrics_seen_registry_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "paths": sorted({str(v).strip() for v in keys if str(v).strip()}),
+        }
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _suggest_similar_tracks_by_name(self, source_stem: str, candidates: list[dict], limit: int = 6) -> list[dict]:
         scored: list[tuple[float, dict]] = []
@@ -495,6 +563,28 @@ class ImportService:
                 file_state_map[rel] = merged
 
         processed_relpaths = set(state.processed_relpaths)
+        existing_source_path_keys = {
+            _normalize_source_path_key(v)
+            for v in repo.list_track_source_fullpaths(include_deleted=True)
+            if str(v).strip()
+        }
+        skipped_audio_path_keys = self._load_skipped_audio_path_keys()
+        seen_lyrics_path_keys = self._load_seen_lyrics_path_keys()
+        pending_review_rows = repo.list_pending_reviews(limit=500_000)
+        pending_audio_path_keys: set[str] = set()
+        pending_lyrics_relpath_keys: set[str] = set()
+        for review in pending_review_rows:
+            payload = review.get("payload") if isinstance(review, dict) else {}
+            if not isinstance(payload, dict):
+                continue
+            review_path = str(payload.get("path", "")).strip()
+            if review_path:
+                pending_audio_path_keys.add(_normalize_source_path_key(review_path))
+            lyrics_source = str(payload.get("lyrics_source", "")).replace("\\", "/").strip()
+            if lyrics_source:
+                pending_lyrics_relpath_keys.add(lyrics_source.casefold())
+        skipped_audio_registry_dirty = False
+        seen_lyrics_registry_dirty = False
 
         def snapshot_file_states() -> list[dict]:
             rows: list[dict] = []
@@ -530,7 +620,8 @@ class ImportService:
             row["status"] = f"待审查-{text}"
             row["reason"] = text
 
-        def set_skipped(relpath: str, reason: str) -> None:
+        def set_skipped(relpath: str, reason: str, *, source_path: Path | None = None) -> None:
+            nonlocal skipped_audio_registry_dirty
             row = file_state_map.get(relpath)
             if not row:
                 return
@@ -538,6 +629,37 @@ class ImportService:
             row["status_code"] = "skipped"
             row["status"] = f"已跳过-{text}"
             row["reason"] = text
+            if source_path is None:
+                return
+            key = _normalize_source_path_key(source_path)
+            if not key:
+                return
+            if key not in skipped_audio_path_keys:
+                skipped_audio_path_keys.add(key)
+                skipped_audio_registry_dirty = True
+
+        def flush_skipped_audio_registry() -> None:
+            nonlocal skipped_audio_registry_dirty
+            if not skipped_audio_registry_dirty:
+                return
+            self._save_skipped_audio_path_keys(skipped_audio_path_keys)
+            skipped_audio_registry_dirty = False
+
+        def mark_seen_lyrics_path(source_path: Path) -> None:
+            nonlocal seen_lyrics_registry_dirty
+            key = _normalize_source_path_key(source_path)
+            if not key:
+                return
+            if key not in seen_lyrics_path_keys:
+                seen_lyrics_path_keys.add(key)
+                seen_lyrics_registry_dirty = True
+
+        def flush_seen_lyrics_registry() -> None:
+            nonlocal seen_lyrics_registry_dirty
+            if not seen_lyrics_registry_dirty:
+                return
+            self._save_seen_lyrics_path_keys(seen_lyrics_path_keys)
+            seen_lyrics_registry_dirty = False
 
         batch_track_records: list[dict] = []
         if state.created_track_ids:
@@ -553,6 +675,45 @@ class ImportService:
                         "storage_relpath": item.get("storage_relpath", ""),
                     }
                 )
+        library_track_records: list[dict] = []
+        for item in repo.list_tracks(limit=2_000_000):
+            library_track_records.append(
+                {
+                    "track_id": item.get("track_id"),
+                    "title": item.get("title", ""),
+                    "artist": item.get("artist", ""),
+                    "album": item.get("album", ""),
+                    "source_stem": Path(item.get("source_relpath") or "").stem,
+                    "storage_relpath": item.get("storage_relpath", ""),
+                }
+            )
+
+        def build_lyrics_suggestions(stem: str, preferred: list[dict], fallback: list[dict], limit: int = 6) -> list[dict]:
+            picked: list[dict] = []
+            seen_track_ids: set[str] = set()
+
+            def _consume(records: list[dict]) -> None:
+                for item in records:
+                    track_id = str(item.get("track_id", "") or "")
+                    if not track_id or track_id in seen_track_ids:
+                        continue
+                    score = _name_similarity(stem, str(item.get("title") or item.get("source_stem") or ""))
+                    if score <= 0.0:
+                        continue
+                    picked.append(
+                        {
+                            "track_id": track_id,
+                            "title": str(item.get("title", "")),
+                            "artist": str(item.get("artist", "")),
+                            "score": round(score, 4),
+                        }
+                    )
+                    seen_track_ids.add(track_id)
+
+            _consume(preferred)
+            _consume(fallback)
+            picked.sort(key=lambda r: float(r.get("score", 0.0)), reverse=True)
+            return picked[:limit]
 
         lyrics_review_groups: list[dict] = []
 
@@ -618,6 +779,8 @@ class ImportService:
             state.processed_relpaths.append(relpath)
             state.processed_files = len(processed_relpaths)
             state.file_states = snapshot_file_states()
+            flush_skipped_audio_registry()
+            flush_seen_lyrics_registry()
             self._save_state(state_file, repo, state)
 
         state.file_states = snapshot_file_states()
@@ -626,6 +789,22 @@ class ImportService:
             for candidate in audio_files:
                 relpath = str(candidate.path.relative_to(source_path)).replace("\\", "/")
                 if relpath in processed_relpaths:
+                    continue
+                source_path_key = _normalize_source_path_key(candidate.path)
+                if source_path_key in existing_source_path_keys:
+                    state.duplicate_tracks += 1
+                    set_skipped(relpath, "源路径重复（库内或已删除）", source_path=candidate.path)
+                    mark_processed(relpath)
+                    continue
+                if source_path_key in skipped_audio_path_keys:
+                    state.duplicate_tracks += 1
+                    set_skipped(relpath, "源路径命中历史跳过记录", source_path=candidate.path)
+                    mark_processed(relpath)
+                    continue
+                if source_path_key in pending_audio_path_keys:
+                    state.duplicate_tracks += 1
+                    set_skipped(relpath, "源路径已在待审查队列", source_path=candidate.path)
+                    mark_processed(relpath)
                     continue
 
                 cancelled, mode = self._wait_control(control, emit, relpath)
@@ -727,13 +906,13 @@ class ImportService:
                     if decision.existing_track_id:
                         existing_rows = repo.get_tracks_by_ids([decision.existing_track_id])
                         existing = existing_rows[0] if existing_rows else {}
-                        if existing:
-                            existing_ext = _normalize_track_ext_payload(existing.get("ext_json"))
-                            merged_existing_ext = _merge_ext_payload_for_duplicate(existing_ext, new_ext_payload)
-                            if merged_existing_ext != existing_ext:
-                                repo.update_track_ext_json(str(existing.get("track_id", "") or decision.existing_track_id), merged_existing_ext)
+                    if existing:
+                        existing_ext = _normalize_track_ext_payload(existing.get("ext_json"))
+                        merged_existing_ext = _merge_ext_payload_for_duplicate(existing_ext, new_ext_payload)
+                        if merged_existing_ext != existing_ext:
+                            repo.update_track_ext_json(str(existing.get("track_id", "") or decision.existing_track_id), merged_existing_ext)
                     state.duplicate_tracks += 1
-                    set_skipped(relpath, "重复且保留已有")
+                    set_skipped(relpath, "重复且保留已有", source_path=candidate.path)
                     mark_processed(relpath)
                     continue
 
@@ -812,7 +991,7 @@ class ImportService:
                         set_review(relpath, "命中已删除歌曲，待确认是否重新导入")
                     else:
                         state.duplicate_tracks += 1
-                        set_skipped(relpath, "source_sha256重复")
+                        set_skipped(relpath, "source_sha256重复", source_path=candidate.path)
                     mark_processed(relpath)
                     continue
 
@@ -852,7 +1031,7 @@ class ImportService:
                         state.duplicate_tracks += 1
                         if storage_abs.exists():
                             storage_abs.unlink(missing_ok=True)
-                        set_skipped(relpath, "source_sha256重复")
+                        set_skipped(relpath, "source_sha256重复", source_path=candidate.path)
                         mark_processed(relpath)
                         continue
                     state.errors.append(f"insert_failed:{candidate.path}:{exc}")
@@ -909,6 +1088,7 @@ class ImportService:
                             track_row.ext_json = merged_new_ext
 
                 state.imported_tracks += 1
+                existing_source_path_keys.add(source_path_key)
                 state.created_track_ids.append(track_id)
                 state.created_storage_relpaths.append(storage_rel)
 
@@ -973,6 +1153,18 @@ class ImportService:
             relpath = str(candidate.path.relative_to(source_path)).replace("\\", "/")
             if relpath in processed_relpaths:
                 continue
+            relpath_key = relpath.casefold()
+            lyrics_source_key = _normalize_source_path_key(candidate.path)
+            if lyrics_source_key in seen_lyrics_path_keys:
+                set_skipped(relpath, "歌词源路径命中历史记录")
+                mark_seen_lyrics_path(candidate.path)
+                mark_processed(relpath)
+                continue
+            if relpath_key in pending_lyrics_relpath_keys:
+                set_skipped(relpath, "歌词源路径已在待审查队列")
+                mark_seen_lyrics_path(candidate.path)
+                mark_processed(relpath)
+                continue
 
             cancelled, mode = self._wait_control(control, emit, relpath)
             if cancelled:
@@ -1008,6 +1200,7 @@ class ImportService:
                 except Exception:
                     pass
                 set_skipped(relpath, "纯音乐占位歌词")
+                mark_seen_lyrics_path(candidate.path)
                 mark_processed(relpath)
                 continue
 
@@ -1037,11 +1230,16 @@ class ImportService:
                     ),
                 )
                 set_review(relpath, "命中已删除歌词，待确认是否重新导入")
+                pending_lyrics_relpath_keys.add(relpath_key)
+                mark_seen_lyrics_path(candidate.path)
                 mark_processed(relpath)
                 continue
 
             if existing_lyrics:
-                lyrics_id = str(existing_lyrics.get("lyrics_id", "") or "")
+                set_skipped(relpath, "歌词文本重复")
+                mark_seen_lyrics_path(candidate.path)
+                mark_processed(relpath)
+                continue
             else:
                 lyrics_id = new_id("lrc")
                 lyrics_rel = shard_relpath("data/lyrics", lyrics_id, "lrc")
@@ -1084,11 +1282,18 @@ class ImportService:
                 state.imported_lyrics += 1
                 state.created_lyrics_ids.append(lyrics_id)
                 state.created_storage_relpaths.append(lyrics_rel)
+                mark_seen_lyrics_path(candidate.path)
 
             set_processing(relpath, "歌词匹配")
             emit("lyrics_match", relpath)
             try:
                 match = self.lyrics_matcher.match_one(candidate.stem_normalized, text, batch_track_records)
+                if (not match.track_id or match.needs_review) and library_track_records:
+                    fallback_match = self.lyrics_matcher.match_one(candidate.stem_normalized, text, library_track_records)
+                    if fallback_match.track_id and (
+                        not match.track_id or float(fallback_match.score or 0.0) >= float(match.score or 0.0)
+                    ):
+                        match = fallback_match
                 if match.track_id and not match.needs_review:
                     repo.link_lyrics(
                         track_id=match.track_id,
@@ -1101,21 +1306,12 @@ class ImportService:
                 else:
                     state.review_items += 1
                     lyrics_group_key, lyrics_group_title = resolve_lyrics_group_key(relpath, text)
-                    lyrics_suggestions: list[dict] = []
-                    for item in batch_track_records:
-                        score = _name_similarity(candidate.path.stem, str(item.get("title") or item.get("source_stem") or ""))
-                        if score <= 0.0:
-                            continue
-                        lyrics_suggestions.append(
-                            {
-                                "track_id": str(item.get("track_id", "")),
-                                "title": str(item.get("title", "")),
-                                "artist": str(item.get("artist", "")),
-                                "score": round(score, 4),
-                            }
-                        )
-                    lyrics_suggestions.sort(key=lambda r: float(r.get("score", 0.0)), reverse=True)
-                    lyrics_suggestions = lyrics_suggestions[:6]
+                    lyrics_suggestions = build_lyrics_suggestions(
+                        candidate.path.stem,
+                        preferred=batch_track_records,
+                        fallback=library_track_records,
+                        limit=6,
+                    )
                     self._enqueue_review(
                         repo,
                         ReviewItem(
@@ -1147,6 +1343,7 @@ class ImportService:
                             is_primary=False,
                         )
                     set_review(relpath, "歌词匹配待人工审查")
+                    pending_lyrics_relpath_keys.add(relpath_key)
             except Exception as exc:
                 state.errors.append(f"lyrics_match_failed:{candidate.path}:{exc}")
                 state.review_items += 1
@@ -1160,6 +1357,7 @@ class ImportService:
                     ),
                 )
                 set_review(relpath, "歌词匹配执行失败")
+                pending_lyrics_relpath_keys.add(relpath_key)
 
             mark_processed(relpath)
 

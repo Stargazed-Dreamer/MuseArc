@@ -52,7 +52,7 @@ class SettingsPage(QWidget):
         self.combo_delete_mode.addItem("仅删除歌曲并解开映射关系", "unlink_only")
 
         self.combo_player_mode = QComboBox()
-        self.combo_player_mode.addItem("内置播放器（暂不可用）", "builtin")
+        self.combo_player_mode.addItem("内置播放器", "builtin")
         self.combo_player_mode.addItem("外部播放器", "external")
 
         self.input_player_path = QLineEdit()

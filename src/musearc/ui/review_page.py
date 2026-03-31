@@ -1,5 +1,11 @@
 ﻿from __future__ import annotations
 
+"""???????
+
+????????????????????????
+??????????????????
+"""
+
 from collections import defaultdict, deque
 from pathlib import Path
 import re
@@ -318,8 +324,8 @@ class ReviewPage(QWidget):
         preview_split.setStretchFactor(1, 1)
         preview_layout.addWidget(preview_split, 1)
         split.addWidget(preview_host)
-        split.setStretchFactor(0, 2)
-        split.setStretchFactor(1, 2)
+        split.setStretchFactor(0, 3)
+        split.setStretchFactor(1, 1)
         root.addWidget(split, 1)
 
         self.preview_left.verticalScrollBar().valueChanged.connect(
@@ -699,6 +705,28 @@ class ReviewPage(QWidget):
             out.append(row)
         return out
 
+    @staticmethod
+    def _song_group_queue_paths(group_rows: list[dict]) -> list[str]:
+        paths: list[str] = []
+        seen: set[str] = set()
+        for row in group_rows:
+            if not isinstance(row, dict):
+                continue
+            for key in ("source_path", "candidate_path"):
+                text = str(row.get(key, "") or "").strip()
+                if text and text not in seen:
+                    seen.add(text)
+                    paths.append(text)
+            candidates = row.get("candidates") if isinstance(row.get("candidates"), list) else []
+            for cand in candidates:
+                if not isinstance(cand, dict):
+                    continue
+                text = str(cand.get("candidate_path", "") or "").strip()
+                if text and text not in seen:
+                    seen.add(text)
+                    paths.append(text)
+        return paths
+
     def _fill_song_tree(self, rows: list[dict]) -> None:
         self._song_group_controls.clear()
         self._clear_group_layout(self.song_groups_layout)
@@ -716,6 +744,7 @@ class ReviewPage(QWidget):
 
         for group_key in sorted(groups.keys(), key=lambda s: s.casefold()):
             group_rows = self._aggregate_song_group_rows(list(groups[group_key]))
+            group_queue_paths = self._song_group_queue_paths(group_rows)
             frame = QFrame()
             frame.setFrameShape(QFrame.Shape.StyledPanel)
             frame.setStyleSheet("QFrame{background:#f8fbff;border:1px solid #d7e4f4;border-radius:8px;}")
@@ -757,7 +786,7 @@ class ReviewPage(QWidget):
 
             max_dur = 300
             for row in group_rows:
-                row_ctrl = self._build_song_row_widget(row, slider)
+                row_ctrl = self._build_song_row_widget(row, slider, group_queue_paths)
                 row_controls.append(row_ctrl)
                 host.addWidget(row_ctrl["container"])
                 max_dur = max(max_dur, _safe_int(row.get("candidate_duration_sec", 0), 0))
@@ -805,7 +834,7 @@ class ReviewPage(QWidget):
             self._apply_song_preset_same_for_group(controls)
         self.song_groups_layout.addStretch(1)
 
-    def _build_song_row_widget(self, row: dict, slider: QSlider) -> dict:
+    def _build_song_row_widget(self, row: dict, slider: QSlider, group_queue_paths: list[str]) -> dict:
         payload = dict(row)
         candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
         if not candidates:
@@ -884,6 +913,7 @@ class ReviewPage(QWidget):
             lambda _=False, r=payload, s=slider: self._play_with_external_player(
                 str(r.get("source_path", "")).strip(),
                 s.value(),
+                queue_paths=list(group_queue_paths),
             )
         )
         for candidate in candidates:
@@ -939,6 +969,7 @@ class ReviewPage(QWidget):
                 lambda _=False, c=dict(candidate), s=slider: self._play_with_external_player(
                     str(c.get("candidate_path", "")).strip(),
                     s.value(),
+                    queue_paths=list(group_queue_paths),
                 )
             )
         return row_ctrl
@@ -1351,7 +1382,7 @@ class ReviewPage(QWidget):
                 Qt.CheckState.Unchecked if item.checkState(0) == Qt.CheckState.Checked else Qt.CheckState.Checked,
             )
 
-    def _play_with_external_player(self, path_text: str, start_sec: int = 0) -> None:
+    def _play_with_external_player(self, path_text: str, start_sec: int = 0, *, queue_paths: list[str] | None = None) -> None:
         target = str(path_text or "").strip()
         if not target:
             QMessageBox.information(self, "播放", "当前行没有可播放路径。")
@@ -1359,7 +1390,16 @@ class ReviewPage(QWidget):
         cfg = self.facade.get_runtime_config()
         mode = str(cfg.ui.player_mode or "external")
         if mode == "builtin":
-            QMessageBox.information(self, "播放", "内置播放器暂未实现，请切换外部播放器。")
+            top = self.window()
+            handler = getattr(top, "queue_and_play_paths", None)
+            if not callable(handler):
+                QMessageBox.information(self, "播放", "当前窗口不支持内置播放器。")
+                return
+            queue = list(queue_paths or [])
+            if not queue:
+                queue = [target]
+            if not bool(handler(queue, start_path=target, start_sec=start_sec)):
+                QMessageBox.information(self, "播放", "未找到可播放文件。")
             return
         exe = str(cfg.ui.external_player_path or "").strip()
         if not exe:

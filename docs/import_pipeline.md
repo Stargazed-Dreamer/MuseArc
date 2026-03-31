@@ -1,66 +1,53 @@
-# 导入流程与分支说明
+# Import Pipeline (Current)
 
-本文档描述当前导入流程每一步做什么、何时进入审查、以及每个分支的处理结果。
+## Scan
+1. Scan source folder into audio candidates and lyrics candidates.
+2. Load resume state (if any) and skip already processed files.
+3. Build per-file status rows for progress/reporting.
 
-## 1. 扫描来源
+## Audio pipeline
+1. Early path-level skip before heavy work:
+   - path already exists in library (including soft-deleted tracks),
+   - path matches historical skipped-audio index,
+   - path already has a pending review item.
+2. Probe media metadata.
+3. Reject too-short files to file-issue review.
+4. Loudness normalize to `-14 LUFS`, then generate fingerprint.
+5. Run duplicate decision (keep existing / review / keep new).
+6. Archive copy + compute `source_sha256` in the same pass.
+7. Resolve `source_sha256` conflicts:
+   - live record -> skip,
+   - deleted record -> review for re-import.
+8. Any skipped audio path is persisted for future fast exclusion.
 
-1. 扫描音频文件与歌词文件，生成待处理列表。
-2. 恢复上次未完成导入时，已处理文件会被跳过，继续后续文件。
+## Lyrics pipeline
+1. Early path-level skip:
+   - path exists in historical processed-lyrics index,
+   - path already has a pending review item.
+2. Read text and unescape HTML entities.
+3. Instrumental placeholder lyrics:
+   - skip lyrics import,
+   - try to mark matched track language as `instrumental`.
+4. `text_hash` dedupe:
+   - deleted lyrics hit -> review,
+   - live lyrics hit -> skip directly (no duplicate review item).
+5. New lyrics insert.
+6. Lyrics-track matching:
+   - try current-batch tracks first,
+   - fallback to full-library tracks,
+   - if still low confidence, enqueue review with suggestions
+     (batch-first suggestions, then library suggestions).
 
-## 2. 音频处理主链路
+## Review de-duplication
+1. Import will not create duplicate pending review items for the same source path.
+2. Lyrics text duplicates are skipped directly to avoid repeated review noise.
 
-1. 音频探测（`ffprobe`）  
-   读取时长、采样率、声道、码率、标签信息（标题/艺术家/专辑）。
-2. 最小时长过滤  
-   低于阈值（默认 45s）进入审查（疑似试听/哑文件）。
-3. 响度归一（`ffmpeg loudnorm`）  
-   先归一到 `-14 LUFS`，再用于后续指纹提取。
-4. 指纹提取  
-   若失败则进入审查，并附带“名称相近”的候选歌曲建议。
-5. 源哈希去重（`source_sha256`）  
-   命中未删除歌曲：直接跳过（已重复）。  
-   命中已删除歌曲：进入“已删除歌曲重新导入”审查组。
-6. 指纹重复决策  
-   `KEEP_EXISTING`: 跳过新文件。  
-   `REVIEW`: 进入歌曲重复审查组。  
-   `KEEP_NEW/KEEP_BOTH`: 继续归档写库。
-7. 归档写库  
-   将音频复制到库内 `data/tracks/...` 并写入数据库。
+## Cancellation & resume
+1. Cancel modes:
+   - stop and keep progress,
+   - stop and rollback all changes in this run.
+2. Resume is supported from the saved import state.
 
-## 3. 歌词处理主链路
-
-1. 读取与解码  
-   读取歌词文本并做 HTML 反转义（例如 `&#228; -> ä`）。
-2. 纯音乐占位检测  
-   命中占位文本时仍尝试匹配歌曲。  
-   匹配成功：对应歌曲 `language_kind` 标记为 `instrumental`，歌词文件跳过。  
-   匹配失败：进入“纯音乐占位歌词未匹配歌曲”审查。
-3. 文本哈希去重（`text_hash`）  
-   命中未删除歌词：复用既有歌词记录。  
-   命中已删除歌词：进入“已删除歌词重新导入”审查组。
-4. 歌词入库  
-   新歌词写入 `data/lyrics/...` 并写库。
-5. 歌词-歌曲匹配  
-   置信度高：自动建立映射。  
-   置信度不足：进入歌词审查组，附建议歌曲候选。
-
-## 4. 审查队列与分组
-
-1. 歌曲审查按 `group_key` 分组展示，每组独立保存/取消导入。
-2. 歌词审查按 `lyrics_group_key` 分组展示，每组独立保存/取消导入。
-3. “保存勾选的文件”会将勾选项置为 `resolved`，未勾选项置为 `ignored`。
-4. “取消导入”会将该组所有项置为 `ignored`。
-
-## 5. 暂停、取消、恢复
-
-1. 可暂停/继续导入。
-2. 取消有两种：
-   - 保留已处理并停止（可继续导入）
-   - 全部回退并停止（删除本次新增数据）
-3. 继续导入会从未处理文件继续，不重复已完成文件。
-
-## 6. 删除与再导入策略
-
-1. 歌曲/歌词删除采用软删除（保留元数据，UI默认不展示）。
-2. 重新导入命中“已删除记录”不会直接恢复，而是进入专门审查，交由用户确认。
-
+## Path index files
+1. `manifests/imports/skipped_audio_paths.json`
+2. `manifests/imports/seen_lyrics_paths.json`
