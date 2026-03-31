@@ -513,29 +513,6 @@ class ImportManagementPage(QWidget):
             self._heavy_modal.deleteLater()
             self._heavy_modal = None
 
-    def _update_heavy_modal(self, *, scanned: int, processed: int, stage: str) -> None:
-        running = self.has_running_import()
-        should_block = running and scanned >= self._heavy_modal_threshold
-        if not should_block:
-            self._close_heavy_modal()
-            return
-        if self._heavy_modal is None:
-            parent = self.window() if self.window() is not None else self
-            dialog = QProgressDialog(parent)
-            dialog.setWindowTitle("处理中")
-            dialog.setCancelButton(None)
-            dialog.setMinimumDuration(0)
-            dialog.setRange(0, 0)
-            dialog.setAutoClose(False)
-            dialog.setAutoReset(False)
-            dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-            self._heavy_modal = dialog
-        self._heavy_modal.setLabelText(
-            f"正在执行大量文件操作，请稍候…\n当前阶段：{stage}\n进度：{max(0, processed)}/{max(0, scanned)}"
-        )
-        if not self._heavy_modal.isVisible():
-            self._heavy_modal.show()
-
     def shutdown_running_import(self, timeout_ms: int = 15000) -> bool:
         self._close_heavy_modal()
         if self._import_worker is not None:
@@ -621,7 +598,6 @@ class ImportManagementPage(QWidget):
 
         if self._detail_dialog is not None and self._detail_dialog.isVisible():
             self._detail_dialog.set_payload(self._last_progress_payload, running=True)
-        self._update_heavy_modal(scanned=scanned, processed=processed, stage=stage)
 
     def _on_import_finished(self, report: dict) -> None:
         self._last_report_payload = dict(report)

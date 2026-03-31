@@ -1,10 +1,10 @@
 ﻿from __future__ import annotations
 
-"""????????
+"""\u5bfc\u5165\u670d\u52a1\u3002
 
-???
-- ???? -> ??? -> ??? -> ??/??????
-- ?????????????????? I/O ??????
+\u6838\u5fc3\u6d41\u7a0b\uff1a
+- \u626b\u63cf\u5bfc\u5165\u6e90 -> \u97f3\u9891/\u6b4c\u8bcd\u63a2\u6d4b -> \u53bb\u91cd\u5224\u5b9a -> \u5165\u5e93\u6216\u8fdb\u5165\u5ba1\u67e5\u3002
+- \u652f\u6301\u65ad\u70b9\u6062\u590d\u3001\u6682\u505c\u53d6\u6d88\u3001\u72b6\u6001\u6e05\u5355\u4e0e\u8def\u5f84\u7ea7\u5feb\u901f\u8df3\u8fc7\u7d22\u5f15\u3002
 """
 
 import json
@@ -291,6 +291,7 @@ def _normalize_source_path_key(value: str | Path) -> str:
 
 class ImportService:
     def __init__(self, library_root: Path, runtime_cfg: RuntimeConfig):
+        """\u521d\u59cb\u5316\u5bfc\u5165\u670d\u52a1\u53ca\u5176\u4f9d\u8d56\u7ec4\u4ef6\u3002"""
         self.library_root = library_root
         self.runtime_cfg = runtime_cfg
         self.dependencies = ImportDependencies(
@@ -303,10 +304,12 @@ class ImportService:
         self.lyrics_matcher = LyricsMatcher(runtime_cfg.thresholds, llm)
 
     def _skipped_path_registry_file(self) -> Path:
+        """\u8fd4\u56de\u5386\u53f2\u8df3\u8fc7\u97f3\u9891\u8def\u5f84\u7d22\u5f15\u6587\u4ef6\u8def\u5f84\u3002"""
         # 历史跳过音频路径索引：用于后续导入快速排除重复来源。
         return self.library_root / "manifests" / "imports" / "skipped_audio_paths.json"
 
     def _load_skipped_audio_path_keys(self) -> set[str]:
+        """\u52a0\u8f7d\u5386\u53f2\u8df3\u8fc7\u97f3\u9891\u8def\u5f84\u7d22\u5f15\u3002"""
         target = self._skipped_path_registry_file()
         if not target.exists():
             return set()
@@ -320,6 +323,7 @@ class ImportService:
         return {_normalize_source_path_key(v) for v in rows if str(v).strip()}
 
     def _save_skipped_audio_path_keys(self, keys: set[str]) -> None:
+        """\u6301\u4e45\u5316\u5386\u53f2\u8df3\u8fc7\u97f3\u9891\u8def\u5f84\u7d22\u5f15\u3002"""
         target = self._skipped_path_registry_file()
         target.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -329,10 +333,12 @@ class ImportService:
         target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _lyrics_seen_registry_file(self) -> Path:
+        """\u8fd4\u56de\u5386\u53f2\u5df2\u5904\u7406\u6b4c\u8bcd\u8def\u5f84\u7d22\u5f15\u6587\u4ef6\u8def\u5f84\u3002"""
         # 历史已处理歌词路径索引：避免同路径重复进入导入与审查。
         return self.library_root / "manifests" / "imports" / "seen_lyrics_paths.json"
 
     def _load_seen_lyrics_path_keys(self) -> set[str]:
+        """\u52a0\u8f7d\u5386\u53f2\u5df2\u5904\u7406\u6b4c\u8bcd\u8def\u5f84\u7d22\u5f15\u3002"""
         target = self._lyrics_seen_registry_file()
         if not target.exists():
             return set()
@@ -346,6 +352,7 @@ class ImportService:
         return {_normalize_source_path_key(v) for v in rows if str(v).strip()}
 
     def _save_seen_lyrics_path_keys(self, keys: set[str]) -> None:
+        """\u6301\u4e45\u5316\u5386\u53f2\u5df2\u5904\u7406\u6b4c\u8bcd\u8def\u5f84\u7d22\u5f15\u3002"""
         target = self._lyrics_seen_registry_file()
         target.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -355,6 +362,7 @@ class ImportService:
         target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _suggest_similar_tracks_by_name(self, source_stem: str, candidates: list[dict], limit: int = 6) -> list[dict]:
+        """\u6309\u540d\u79f0\u76f8\u4f3c\u5ea6\u7ed9\u51fa\u5019\u9009\u6b4c\u66f2\u5efa\u8bae\u3002"""
         scored: list[tuple[float, dict]] = []
         for row in candidates:
             candidate_name = str(row.get("title") or row.get("file_name") or "")
@@ -380,6 +388,7 @@ class ImportService:
         source_path: Path,
         target_lufs: float = -14.0,
     ) -> Fingerprint:
+        """\u5f52\u4e00\u54cd\u5ea6\u540e\u751f\u6210\u97f3\u9891\u6307\u7eb9\u3002"""
         try:
             decoded = decode_audio(
                 source_path,
@@ -413,6 +422,7 @@ class ImportService:
         existing_track_id: str | None = None,
         replace_existing: bool = True,
     ) -> dict:
+        """\u5c06\u5355\u9996\u6b4c\u66f2\u5bfc\u5165\u5e76\u7528\u4e8e\u91cd\u590d\u5ba1\u67e5\u66ff\u6362\u6d41\u7a0b\u3002"""
         source = Path(source_path).expanduser().resolve()
         probe = self.dependencies.probe.probe(source)
         fp = self._fingerprint_with_loudness_normalization(source, target_lufs=-14.0)
@@ -518,887 +528,20 @@ class ImportService:
         control: ImportControl | None = None,
         resume: bool = True,
     ) -> ImportReport:
-        source_path = source_path.resolve()
-        state_file = resume_state_path(self.library_root, source_path)
-        state = load_resume_state(state_file) if resume else None
-        resumed = state is not None
+        """\u5bfc\u5165\u5165\u53e3\uff1a\u8c03\u7528\u62c6\u5206\u540e\u7684\u5bfc\u5165\u7ba1\u7ebf\u5e76\u8fd4\u56de\u5bfc\u5165\u62a5\u544a\u3002"""
+        from musearc.services.importer_pipeline import run_import_path
 
-        audio_files, lyrics_files = scan_import_source(source_path)
-        scanned_files = len(audio_files) + len(lyrics_files)
-        all_relpaths = [str(c.path.relative_to(source_path)).replace("\\", "/") for c in [*audio_files, *lyrics_files]]
-
-        if state is None:
-            start_time = _utc_now()
-            state = ResumeState(
-                version=1,
-                import_batch_id=new_id("imp"),
-                source_path=str(source_path),
-                started_at=start_time.isoformat(),
-                scanned_files=scanned_files,
-                processed_files=0,
-            )
-            repo.start_import_batch(state.import_batch_id, str(source_path), start_time)
-            self._save_state(state_file, repo, state)
-        else:
-            start_time = datetime.fromisoformat(state.started_at)
-            state.scanned_files = scanned_files
-            repo.start_import_batch(state.import_batch_id, str(source_path), start_time)
-
-        file_state_map: dict[str, dict] = {}
-        for rel in all_relpaths:
-            file_state_map[rel] = {
-                "relpath": rel,
-                "file_name": Path(rel).name,
-                "status": "待处理",
-                "status_code": "pending",
-                "reason": "",
-            }
-        for row in state.file_states or []:
-            if not isinstance(row, dict):
-                continue
-            rel = str(row.get("relpath", "")).replace("\\", "/")
-            if rel and rel in file_state_map:
-                merged = dict(file_state_map[rel])
-                merged.update({k: v for k, v in row.items() if k in {"status", "status_code", "reason"}})
-                file_state_map[rel] = merged
-
-        processed_relpaths = set(state.processed_relpaths)
-        existing_source_path_keys = {
-            _normalize_source_path_key(v)
-            for v in repo.list_track_source_fullpaths(include_deleted=True)
-            if str(v).strip()
-        }
-        skipped_audio_path_keys = self._load_skipped_audio_path_keys()
-        seen_lyrics_path_keys = self._load_seen_lyrics_path_keys()
-        pending_review_rows = repo.list_pending_reviews(limit=500_000)
-        pending_audio_path_keys: set[str] = set()
-        pending_lyrics_relpath_keys: set[str] = set()
-        for review in pending_review_rows:
-            payload = review.get("payload") if isinstance(review, dict) else {}
-            if not isinstance(payload, dict):
-                continue
-            review_path = str(payload.get("path", "")).strip()
-            if review_path:
-                pending_audio_path_keys.add(_normalize_source_path_key(review_path))
-            lyrics_source = str(payload.get("lyrics_source", "")).replace("\\", "/").strip()
-            if lyrics_source:
-                pending_lyrics_relpath_keys.add(lyrics_source.casefold())
-        skipped_audio_registry_dirty = False
-        seen_lyrics_registry_dirty = False
-
-        def snapshot_file_states() -> list[dict]:
-            rows: list[dict] = []
-            for rel in all_relpaths:
-                state_row = file_state_map.get(rel)
-                if not state_row:
-                    continue
-                rows.append(dict(state_row))
-            return rows
-
-        def set_processing(relpath: str, step: str) -> None:
-            row = file_state_map.get(relpath)
-            if not row:
-                return
-            row["status_code"] = "processing"
-            row["status"] = f"处理中-{step}"
-            row["reason"] = step
-
-        def set_archived(relpath: str) -> None:
-            row = file_state_map.get(relpath)
-            if not row:
-                return
-            row["status_code"] = "archived"
-            row["status"] = "已归档"
-            row["reason"] = ""
-
-        def set_review(relpath: str, reason: str) -> None:
-            row = file_state_map.get(relpath)
-            if not row:
-                return
-            text = str(reason or "").strip() or "待人工确认"
-            row["status_code"] = "review"
-            row["status"] = f"待审查-{text}"
-            row["reason"] = text
-
-        def set_skipped(relpath: str, reason: str, *, source_path: Path | None = None) -> None:
-            nonlocal skipped_audio_registry_dirty
-            row = file_state_map.get(relpath)
-            if not row:
-                return
-            text = str(reason or "").strip() or "已跳过"
-            row["status_code"] = "skipped"
-            row["status"] = f"已跳过-{text}"
-            row["reason"] = text
-            if source_path is None:
-                return
-            key = _normalize_source_path_key(source_path)
-            if not key:
-                return
-            if key not in skipped_audio_path_keys:
-                skipped_audio_path_keys.add(key)
-                skipped_audio_registry_dirty = True
-
-        def flush_skipped_audio_registry() -> None:
-            nonlocal skipped_audio_registry_dirty
-            if not skipped_audio_registry_dirty:
-                return
-            self._save_skipped_audio_path_keys(skipped_audio_path_keys)
-            skipped_audio_registry_dirty = False
-
-        def mark_seen_lyrics_path(source_path: Path) -> None:
-            nonlocal seen_lyrics_registry_dirty
-            key = _normalize_source_path_key(source_path)
-            if not key:
-                return
-            if key not in seen_lyrics_path_keys:
-                seen_lyrics_path_keys.add(key)
-                seen_lyrics_registry_dirty = True
-
-        def flush_seen_lyrics_registry() -> None:
-            nonlocal seen_lyrics_registry_dirty
-            if not seen_lyrics_registry_dirty:
-                return
-            self._save_seen_lyrics_path_keys(seen_lyrics_path_keys)
-            seen_lyrics_registry_dirty = False
-
-        batch_track_records: list[dict] = []
-        if state.created_track_ids:
-            prior = repo.get_tracks_by_ids(state.created_track_ids)
-            for item in prior:
-                batch_track_records.append(
-                    {
-                        "track_id": item.get("track_id"),
-                        "title": item.get("title", ""),
-                        "artist": item.get("artist", ""),
-                        "album": item.get("album", ""),
-                        "source_stem": Path(item.get("source_relpath") or "").stem,
-                        "storage_relpath": item.get("storage_relpath", ""),
-                    }
-                )
-        library_track_records: list[dict] = []
-        for item in repo.list_tracks(limit=2_000_000):
-            library_track_records.append(
-                {
-                    "track_id": item.get("track_id"),
-                    "title": item.get("title", ""),
-                    "artist": item.get("artist", ""),
-                    "album": item.get("album", ""),
-                    "source_stem": Path(item.get("source_relpath") or "").stem,
-                    "storage_relpath": item.get("storage_relpath", ""),
-                }
-            )
-
-        def build_lyrics_suggestions(stem: str, preferred: list[dict], fallback: list[dict], limit: int = 6) -> list[dict]:
-            picked: list[dict] = []
-            seen_track_ids: set[str] = set()
-
-            def _consume(records: list[dict]) -> None:
-                for item in records:
-                    track_id = str(item.get("track_id", "") or "")
-                    if not track_id or track_id in seen_track_ids:
-                        continue
-                    score = _name_similarity(stem, str(item.get("title") or item.get("source_stem") or ""))
-                    if score <= 0.0:
-                        continue
-                    picked.append(
-                        {
-                            "track_id": track_id,
-                            "title": str(item.get("title", "")),
-                            "artist": str(item.get("artist", "")),
-                            "score": round(score, 4),
-                        }
-                    )
-                    seen_track_ids.add(track_id)
-
-            _consume(preferred)
-            _consume(fallback)
-            picked.sort(key=lambda r: float(r.get("score", 0.0)), reverse=True)
-            return picked[:limit]
-
-        lyrics_review_groups: list[dict] = []
-
-        def resolve_lyrics_group_key(relpath: str, lyrics_text: str) -> tuple[str, str]:
-            stem_norm = _normalize_name_for_compare(Path(relpath).stem)
-            lines = lrc_visible_lines(lyrics_text, max_lines=80)
-            text_norm = " ".join(normalize_text(line) for line in lines)
-            for group in lyrics_review_groups:
-                name_sim = difflib.SequenceMatcher(None, stem_norm, group["stem_norm"]).ratio()
-                text_sim = (
-                    difflib.SequenceMatcher(None, text_norm, group["text_norm"]).ratio()
-                    if text_norm and group["text_norm"]
-                    else 0.0
-                )
-                if name_sim >= 0.92 or text_sim >= 0.90:
-                    return str(group["group_key"]), str(group.get("group_title") or group["group_key"])
-
-            group_key = _lyrics_group_display_name(relpath)
-            lyrics_review_groups.append(
-                {
-                    "group_key": group_key,
-                    "group_title": _lyrics_group_display_name(relpath),
-                    "stem_norm": stem_norm,
-                    "text_norm": text_norm,
-                }
-            )
-            return group_key, _lyrics_group_display_name(relpath)
-
-        last_emit_ts = 0.0
-
-        def emit(stage: str, current_file: str = "", force: bool = False, paused: bool = False) -> None:
-            nonlocal last_emit_ts
-            if not progress_callback:
-                return
-            now = time.monotonic()
-            if not force and now - last_emit_ts < 0.2:
-                return
-            last_emit_ts = now
-            progress_callback(
-                ImportProgress(
-                    import_batch_id=state.import_batch_id,
-                    source_path=str(source_path),
-                    stage=stage,
-                    current_file=current_file,
-                    scanned_files=state.scanned_files,
-                    processed_files=state.processed_files,
-                    imported_tracks=state.imported_tracks,
-                    duplicate_tracks=state.duplicate_tracks,
-                    imported_lyrics=state.imported_lyrics,
-                    matched_lyrics=state.matched_lyrics,
-                    review_items=state.review_items,
-                    errors=len(state.errors),
-                    resumed=resumed,
-                    paused=paused,
-                    file_states=snapshot_file_states(),
-                )
-            )
-
-        def mark_processed(relpath: str) -> None:
-            if relpath in processed_relpaths:
-                return
-            processed_relpaths.add(relpath)
-            state.processed_relpaths.append(relpath)
-            state.processed_files = len(processed_relpaths)
-            state.file_states = snapshot_file_states()
-            flush_skipped_audio_registry()
-            flush_seen_lyrics_registry()
-            self._save_state(state_file, repo, state)
-
-        state.file_states = snapshot_file_states()
-        emit("start", force=True)
-        with nullcontext():
-            for candidate in audio_files:
-                relpath = str(candidate.path.relative_to(source_path)).replace("\\", "/")
-                if relpath in processed_relpaths:
-                    continue
-                source_path_key = _normalize_source_path_key(candidate.path)
-                if source_path_key in existing_source_path_keys:
-                    state.duplicate_tracks += 1
-                    set_skipped(relpath, "源路径重复（库内或已删除）", source_path=candidate.path)
-                    mark_processed(relpath)
-                    continue
-                if source_path_key in skipped_audio_path_keys:
-                    state.duplicate_tracks += 1
-                    set_skipped(relpath, "源路径命中历史跳过记录", source_path=candidate.path)
-                    mark_processed(relpath)
-                    continue
-                if source_path_key in pending_audio_path_keys:
-                    state.duplicate_tracks += 1
-                    set_skipped(relpath, "源路径已在待审查队列", source_path=candidate.path)
-                    mark_processed(relpath)
-                    continue
-
-                cancelled, mode = self._wait_control(control, emit, relpath)
-                if cancelled:
-                    state.file_states = snapshot_file_states()
-                    return self._handle_cancel(repo, state, state_file, start_time, rollback=(mode == "rollback"), emit=emit)
-
-                pending_review_reason: str | None = None
-
-                set_processing(relpath, "音频探测")
-                emit("audio_probe", relpath)
-                try:
-                    probe = self.dependencies.probe.probe(candidate.path)
-                except MediaCommandError as exc:
-                    state.errors.append(f"probe_failed:{candidate.path}:{exc}")
-                    state.review_items += 1
-                    self._enqueue_review(
-                        repo,
-                        ReviewItem(
-                            kind=ReviewKind.FILE_ISSUE,
-                            title="音频探测失败",
-                            payload={"path": str(candidate.path), "error": str(exc)},
-                            priority=3,
-                        ),
-                    )
-                    set_review(relpath, "音频探测失败")
-                    mark_processed(relpath)
-                    continue
-
-                if probe.duration_sec < self.runtime_cfg.thresholds.min_track_duration_sec:
-                    state.review_items += 1
-                    self._enqueue_review(
-                        repo,
-                        ReviewItem(
-                            kind=ReviewKind.FILE_ISSUE,
-                            title="疑似试听或哑文件",
-                            payload={"path": str(candidate.path), "duration_sec": probe.duration_sec},
-                            priority=2,
-                        ),
-                    )
-                    set_review(relpath, "疑似试听或哑文件")
-                    mark_processed(relpath)
-                    continue
-
-                set_processing(relpath, "指纹提取")
-                emit("audio_loudnorm", relpath)
-                emit("audio_fingerprint", relpath)
-                try:
-                    fp = self._fingerprint_with_loudness_normalization(
-                        candidate.path,
-                        target_lufs=-14.0,
-                    )
-                except MediaCommandError as exc:
-                    err_text = str(exc).casefold()
-                    issue_title = "指纹提取失败"
-                    issue_reason = "指纹提取失败"
-                    if "loudnorm" in err_text:
-                        issue_title = "响度归一不可用"
-                        issue_reason = "响度归一不可用"
-                    state.errors.append(f"fingerprint_failed:{candidate.path}:{exc}")
-                    state.review_items += 1
-                    suggest_pool = repo.find_duplicate_candidates(probe.duration_sec, tolerance_sec=30.0)
-                    suggestions = self._suggest_similar_tracks_by_name(candidate.path.stem, suggest_pool)
-                    self._enqueue_review(
-                        repo,
-                        ReviewItem(
-                            kind=ReviewKind.FILE_ISSUE,
-                            title=issue_title,
-                            payload={
-                                "path": str(candidate.path),
-                                "error": str(exc),
-                                "title_hint": candidate.path.stem,
-                                "suggest_candidates": suggestions,
-                                "group_key": suggestions[0].get("track_id") if suggestions else "",
-                            },
-                            priority=3,
-                        ),
-                    )
-                    set_review(relpath, issue_reason)
-                    mark_processed(relpath)
-                    continue
-
-                title, artist = _derive_title_artist(candidate.path, probe.title, probe.artist)
-                quality = _quality_score(probe.duration_sec, probe.bit_rate, candidate.ext)
-                fp_payload = self.dependencies.fingerprint.encode_vector(fp.vector)
-                new_ext_payload = _build_track_ext_payload(probe)
-                set_processing(relpath, "源去重")
-
-                dedupe_candidates = repo.find_duplicate_candidates(probe.duration_sec)
-                decision = self.duplicate_evaluator.decide(
-                    new_payload=fp_payload,
-                    new_quality=quality,
-                    new_title=title,
-                    new_source_ext=candidate.ext,
-                    candidates=dedupe_candidates,
-                )
-
-                if decision.decision == DuplicateDecision.KEEP_EXISTING:
-                    if decision.existing_track_id:
-                        existing_rows = repo.get_tracks_by_ids([decision.existing_track_id])
-                        existing = existing_rows[0] if existing_rows else {}
-                    if existing:
-                        existing_ext = _normalize_track_ext_payload(existing.get("ext_json"))
-                        merged_existing_ext = _merge_ext_payload_for_duplicate(existing_ext, new_ext_payload)
-                        if merged_existing_ext != existing_ext:
-                            repo.update_track_ext_json(str(existing.get("track_id", "") or decision.existing_track_id), merged_existing_ext)
-                    state.duplicate_tracks += 1
-                    set_skipped(relpath, "重复且保留已有", source_path=candidate.path)
-                    mark_processed(relpath)
-                    continue
-
-                if decision.decision == DuplicateDecision.REVIEW:
-                    state.review_items += 1
-                    self._enqueue_review(
-                        repo,
-                        ReviewItem(
-                            kind=ReviewKind.DUPLICATE,
-                            title="疑似重复音频",
-                            payload={
-                                "path": str(candidate.path),
-                                "score": decision.score,
-                                "existing_track_id": decision.existing_track_id,
-                                "reason": decision.reason,
-                                "deferred_import": True,
-                                "replace_existing_suggested": True,
-                            },
-                            priority=3,
-                        ),
-                    )
-                    set_review(relpath, "疑似重复音频")
-                    mark_processed(relpath)
-                    continue
-
-                track_id = new_id("trk")
-                ext_no_dot = candidate.ext.lower().strip(".") or "bin"
-                storage_rel = shard_relpath("data/tracks", track_id, ext_no_dot)
-                storage_abs = self.library_root / Path(storage_rel)
-                ensure_parent(storage_abs)
-
-                set_processing(relpath, "归档")
-                emit("audio_copy", relpath)
-                try:
-                    source_sha = _copy_file_and_sha256(candidate.path, storage_abs)
-                except Exception as exc:
-                    state.errors.append(f"copy_failed:{candidate.path}:{exc}")
-                    state.review_items += 1
-                    self._enqueue_review(
-                        repo,
-                        ReviewItem(
-                            kind=ReviewKind.FILE_ISSUE,
-                            title="复制归档失败",
-                            payload={"path": str(candidate.path), "error": str(exc)},
-                            priority=3,
-                        ),
-                    )
-                    if storage_abs.exists():
-                        storage_abs.unlink(missing_ok=True)
-                    set_review(relpath, "复制归档失败")
-                    mark_processed(relpath)
-                    continue
-
-                existing_by_sha = repo.get_track_by_source_sha(source_sha)
-                if existing_by_sha:
-                    if storage_abs.exists():
-                        storage_abs.unlink(missing_ok=True)
-                    if existing_by_sha.get("deleted_at"):
-                        state.review_items += 1
-                        self._enqueue_review(
-                            repo,
-                            ReviewItem(
-                                kind=ReviewKind.DUPLICATE,
-                                title="已删除歌曲重新导入",
-                                payload={
-                                    "path": str(candidate.path),
-                                    "score": 1.0,
-                                    "reason": "命中已删除曲目",
-                                    "existing_track_id": str(existing_by_sha.get("track_id", "") or ""),
-                                    "group_key": str(existing_by_sha.get("track_id", "") or "")[:8],
-                                    "deferred_import": True,
-                                },
-                                priority=2,
-                            ),
-                        )
-                        set_review(relpath, "命中已删除歌曲，待确认是否重新导入")
-                    else:
-                        state.duplicate_tracks += 1
-                        set_skipped(relpath, "source_sha256重复", source_path=candidate.path)
-                    mark_processed(relpath)
-                    continue
-
-                track_row = TrackInsert(
-                    track_id=track_id,
-                    file_name=candidate.path.name,
-                    title=title,
-                    artist=artist,
-                    album=(probe.album or ""),
-                    language_kind="unknown",
-                    preference_level=5,
-                    storage_format=ext_no_dot,
-                    kind=infer_track_kind(title),
-                    duration_sec=probe.duration_sec,
-                    sample_rate=probe.sample_rate,
-                    channels=probe.channels,
-                    bit_rate=probe.bit_rate,
-                    quality_score=quality,
-                    storage_relpath=storage_rel,
-                    source_relpath=relpath,
-                    source_fullpath=str(candidate.path.resolve()),
-                    source_sha256=source_sha,
-                    source_ext=candidate.ext,
-                    probe_codec=probe.codec,
-                    file_health=FileHealth.OK,
-                    fingerprint_version=fp.version,
-                    fingerprint_digest=fp.digest,
-                    fingerprint_payload=fp_payload,
-                    imported_at=_utc_now(),
-                    ext_json=new_ext_payload,
-                )
-                try:
-                    repo.insert_track(track_row)
-                except Exception as exc:
-                    msg = str(exc).lower()
-                    if "unique constraint failed: tracks.source_sha256" in msg:
-                        state.duplicate_tracks += 1
-                        if storage_abs.exists():
-                            storage_abs.unlink(missing_ok=True)
-                        set_skipped(relpath, "source_sha256重复", source_path=candidate.path)
-                        mark_processed(relpath)
-                        continue
-                    state.errors.append(f"insert_failed:{candidate.path}:{exc}")
-                    state.review_items += 1
-                    self._enqueue_review(
-                        repo,
-                        ReviewItem(
-                            kind=ReviewKind.FILE_ISSUE,
-                            title="写入数据库失败",
-                            payload={"path": str(candidate.path), "error": str(exc)},
-                            priority=3,
-                        ),
-                    )
-                    if storage_abs.exists():
-                        storage_abs.unlink(missing_ok=True)
-                    set_review(relpath, "写入数据库失败")
-                    mark_processed(relpath)
-                    continue
-
-                if decision.existing_track_id:
-                    existing_rows = repo.get_tracks_by_ids([decision.existing_track_id])
-                    existing = existing_rows[0] if existing_rows else {}
-                    if existing:
-                        merge_patch: dict[str, object] = {}
-
-                        def _needs_fill(field_key: str, current: str) -> bool:
-                            text = str(current or "").strip().casefold()
-                            if field_key == "title":
-                                return text in {"", "unknown title", "unknown"}
-                            if field_key == "artist":
-                                return text in {"", "unknown artist", "unknown"}
-                            if field_key == "language_kind":
-                                return text in {"", "unknown"}
-                            return text == ""
-
-                        if _needs_fill("title", title) and str(existing.get("title", "")).strip():
-                            merge_patch["title"] = str(existing.get("title", "")).strip()
-                        if _needs_fill("artist", artist) and str(existing.get("artist", "")).strip():
-                            merge_patch["artist"] = str(existing.get("artist", "")).strip()
-                        if _needs_fill("album", probe.album or "") and str(existing.get("album", "")).strip():
-                            merge_patch["album"] = str(existing.get("album", "")).strip()
-                        if _needs_fill("language_kind", "unknown") and str(existing.get("language_kind", "")).strip():
-                            merge_patch["language_kind"] = str(existing.get("language_kind", "")).strip()
-                        if merge_patch:
-                            repo.update_tracks_fields([track_id], merge_patch)
-                            title = str(merge_patch.get("title", title))
-                            artist = str(merge_patch.get("artist", artist))
-
-                        existing_ext = _normalize_track_ext_payload(existing.get("ext_json"))
-                        current_new_ext = _normalize_track_ext_payload(track_row.ext_json)
-                        merged_new_ext = _merge_ext_payload_for_duplicate(current_new_ext, existing_ext)
-                        if merged_new_ext != current_new_ext:
-                            repo.update_track_ext_json(track_id, merged_new_ext)
-                            track_row.ext_json = merged_new_ext
-
-                state.imported_tracks += 1
-                existing_source_path_keys.add(source_path_key)
-                state.created_track_ids.append(track_id)
-                state.created_storage_relpaths.append(storage_rel)
-
-                batch_track_records.append(
-                    {
-                        "track_id": track_id,
-                        "title": title,
-                        "artist": artist,
-                        "album": probe.album or "",
-                        "source_stem": candidate.path.stem,
-                        "storage_relpath": storage_rel,
-                    }
-                )
-
-                if decision.existing_track_id and decision.score >= self.runtime_cfg.thresholds.duplicate_review:
-                    repo.add_variant(
-                        variant_id=new_id("var"),
-                        primary_track_id=decision.existing_track_id,
-                        variant_track_id=track_id,
-                        relation_type="similar_version",
-                        similarity_score=decision.score,
-                        reason=decision.reason,
-                    )
-
-                if decision.decision == DuplicateDecision.KEEP_NEW and decision.existing_track_id:
-                    old_relpaths = [
-                        str(r.get("storage_relpath", "") or "")
-                        for r in repo.get_tracks_by_ids([decision.existing_track_id])
-                        if str(r.get("storage_relpath", "") or "").strip()
-                    ]
-                    deleted = repo.soft_delete_tracks([decision.existing_track_id])
-                    if deleted > 0:
-                        state.soft_deleted_existing_ids.append(decision.existing_track_id)
-                        for rel in old_relpaths:
-                            try:
-                                (self.library_root / rel).unlink(missing_ok=True)
-                            except Exception:
-                                pass
-                    else:
-                        state.review_items += 1
-                        pending_review_reason = pending_review_reason or "预期替换旧版本但未删除"
-                        self._enqueue_review(
-                            repo,
-                            ReviewItem(
-                                kind=ReviewKind.DUPLICATE,
-                                title="预期替换旧版本但未删除",
-                                payload={
-                                    "new_track_id": track_id,
-                                    "existing_track_id": decision.existing_track_id,
-                                },
-                                priority=2,
-                            ),
-                        )
-
-                if pending_review_reason:
-                    set_review(relpath, pending_review_reason)
-                else:
-                    set_archived(relpath)
-                mark_processed(relpath)
-
-        for candidate in lyrics_files:
-            relpath = str(candidate.path.relative_to(source_path)).replace("\\", "/")
-            if relpath in processed_relpaths:
-                continue
-            relpath_key = relpath.casefold()
-            lyrics_source_key = _normalize_source_path_key(candidate.path)
-            if lyrics_source_key in seen_lyrics_path_keys:
-                set_skipped(relpath, "歌词源路径命中历史记录")
-                mark_seen_lyrics_path(candidate.path)
-                mark_processed(relpath)
-                continue
-            if relpath_key in pending_lyrics_relpath_keys:
-                set_skipped(relpath, "歌词源路径已在待审查队列")
-                mark_seen_lyrics_path(candidate.path)
-                mark_processed(relpath)
-                continue
-
-            cancelled, mode = self._wait_control(control, emit, relpath)
-            if cancelled:
-                state.file_states = snapshot_file_states()
-                return self._handle_cancel(repo, state, state_file, start_time, rollback=(mode == "rollback"), emit=emit)
-
-            set_processing(relpath, "读取歌词")
-            emit("lyrics_read", relpath)
-            try:
-                text, enc = read_text_guess_encoding(candidate.path)
-                text = html.unescape(text)
-            except Exception as exc:
-                state.errors.append(f"lyrics_read_failed:{candidate.path}:{exc}")
-                state.review_items += 1
-                self._enqueue_review(
-                    repo,
-                    ReviewItem(
-                        kind=ReviewKind.FILE_ISSUE,
-                        title="歌词读取失败",
-                        payload={"path": str(candidate.path), "error": str(exc)},
-                        priority=2,
-                    ),
-                )
-                set_review(relpath, "歌词读取失败")
-                mark_processed(relpath)
-                continue
-
-            if _is_placeholder_empty_lyrics(text):
-                try:
-                    placeholder_match = self.lyrics_matcher.match_one(candidate.stem_normalized, text, batch_track_records)
-                    if placeholder_match.track_id and float(placeholder_match.score or 0.0) >= 0.65:
-                        repo.update_tracks_fields([str(placeholder_match.track_id)], {"language_kind": "instrumental"})
-                except Exception:
-                    pass
-                set_skipped(relpath, "纯音乐占位歌词")
-                mark_seen_lyrics_path(candidate.path)
-                mark_processed(relpath)
-                continue
-
-            text_hash = sha1_text(text)
-            lyrics_author, line_count, lyrics_title, lyrics_artist, lyrics_album = _extract_lyrics_meta(text)
-            existing_lyrics = repo.get_lyrics_by_text_hash(text_hash)
-            if existing_lyrics and existing_lyrics.get("deleted_at"):
-                state.review_items += 1
-                lyrics_group_key, lyrics_group_title = resolve_lyrics_group_key(relpath, text)
-                self._enqueue_review(
-                    repo,
-                    ReviewItem(
-                        kind=ReviewKind.LYRICS_MATCH,
-                        title="已删除歌词重新导入",
-                        payload={
-                            "lyrics_source": relpath,
-                            "lyrics_id": str(existing_lyrics.get("lyrics_id", "") or ""),
-                            "suggest_track_id": "",
-                            "score": 1.0,
-                            "reason": "命中已删除歌词",
-                            "lyrics_preview": text.splitlines()[:10],
-                            "group_key": lyrics_group_key,
-                            "lyrics_group_key": lyrics_group_key,
-                            "lyrics_group_title": lyrics_group_title,
-                        },
-                        priority=2,
-                    ),
-                )
-                set_review(relpath, "命中已删除歌词，待确认是否重新导入")
-                pending_lyrics_relpath_keys.add(relpath_key)
-                mark_seen_lyrics_path(candidate.path)
-                mark_processed(relpath)
-                continue
-
-            if existing_lyrics:
-                set_skipped(relpath, "歌词文本重复")
-                mark_seen_lyrics_path(candidate.path)
-                mark_processed(relpath)
-                continue
-            else:
-                lyrics_id = new_id("lrc")
-                lyrics_rel = shard_relpath("data/lyrics", lyrics_id, "lrc")
-                lyrics_abs = self.library_root / Path(lyrics_rel)
-                ensure_parent(lyrics_abs)
-                try:
-                    lyrics_abs.write_text(text, encoding="utf-8")
-                    repo.insert_lyrics(
-                        LyricsInsert(
-                            lyrics_id=lyrics_id,
-                            source_relpath=relpath,
-                            storage_relpath=lyrics_rel,
-                            text_hash=text_hash,
-                            raw_encoding=enc,
-                            lyrics_title=lyrics_title,
-                            lyrics_artist=lyrics_artist,
-                            lyrics_album=lyrics_album,
-                            lyrics_author=lyrics_author,
-                            line_count=line_count,
-                            imported_at=_utc_now(),
-                        )
-                    )
-                except Exception as exc:
-                    state.errors.append(f"lyrics_insert_failed:{candidate.path}:{exc}")
-                    state.review_items += 1
-                    self._enqueue_review(
-                        repo,
-                        ReviewItem(
-                            kind=ReviewKind.FILE_ISSUE,
-                            title="歌词写入失败",
-                            payload={"path": str(candidate.path), "error": str(exc)},
-                            priority=2,
-                        ),
-                    )
-                    if lyrics_abs.exists():
-                        lyrics_abs.unlink(missing_ok=True)
-                    set_review(relpath, "歌词写入失败")
-                    mark_processed(relpath)
-                    continue
-                state.imported_lyrics += 1
-                state.created_lyrics_ids.append(lyrics_id)
-                state.created_storage_relpaths.append(lyrics_rel)
-                mark_seen_lyrics_path(candidate.path)
-
-            set_processing(relpath, "歌词匹配")
-            emit("lyrics_match", relpath)
-            try:
-                match = self.lyrics_matcher.match_one(candidate.stem_normalized, text, batch_track_records)
-                if (not match.track_id or match.needs_review) and library_track_records:
-                    fallback_match = self.lyrics_matcher.match_one(candidate.stem_normalized, text, library_track_records)
-                    if fallback_match.track_id and (
-                        not match.track_id or float(fallback_match.score or 0.0) >= float(match.score or 0.0)
-                    ):
-                        match = fallback_match
-                if match.track_id and not match.needs_review:
-                    repo.link_lyrics(
-                        track_id=match.track_id,
-                        lyrics_id=lyrics_id,
-                        confidence=match.score,
-                        match_method=match.reason,
-                    )
-                    state.matched_lyrics += 1
-                    set_archived(relpath)
-                else:
-                    state.review_items += 1
-                    lyrics_group_key, lyrics_group_title = resolve_lyrics_group_key(relpath, text)
-                    lyrics_suggestions = build_lyrics_suggestions(
-                        candidate.path.stem,
-                        preferred=batch_track_records,
-                        fallback=library_track_records,
-                        limit=6,
-                    )
-                    self._enqueue_review(
-                        repo,
-                        ReviewItem(
-                            kind=ReviewKind.LYRICS_MATCH,
-                            title="歌词匹配待人工审查",
-                            payload={
-                                "lyrics_source": relpath,
-                                "lyrics_id": lyrics_id,
-                                "suggest_track_id": match.track_id,
-                                "score": match.score,
-                                "reason": match.reason,
-                                "discard_reason": "匹配置信度不足",
-                                "lyrics_preview": text.splitlines()[:10],
-                                "title_hint": candidate.path.stem,
-                                "suggest_candidates": lyrics_suggestions,
-                                "group_key": lyrics_suggestions[0].get("track_id") if lyrics_suggestions else lyrics_group_key,
-                                "lyrics_group_key": lyrics_group_key,
-                                "lyrics_group_title": lyrics_group_title,
-                            },
-                            priority=2,
-                        ),
-                    )
-                    if match.track_id:
-                        repo.link_lyrics(
-                            track_id=match.track_id,
-                            lyrics_id=lyrics_id,
-                            confidence=match.score,
-                            match_method=f"review:{match.reason}",
-                            is_primary=False,
-                        )
-                    set_review(relpath, "歌词匹配待人工审查")
-                    pending_lyrics_relpath_keys.add(relpath_key)
-            except Exception as exc:
-                state.errors.append(f"lyrics_match_failed:{candidate.path}:{exc}")
-                state.review_items += 1
-                self._enqueue_review(
-                    repo,
-                    ReviewItem(
-                        kind=ReviewKind.FILE_ISSUE,
-                        title="歌词匹配执行失败",
-                        payload={"path": str(candidate.path), "error": str(exc)},
-                        priority=2,
-                    ),
-                )
-                set_review(relpath, "歌词匹配执行失败")
-                pending_lyrics_relpath_keys.add(relpath_key)
-
-            mark_processed(relpath)
-
-        end_time = _utc_now()
-        state.file_states = snapshot_file_states()
-        repo.finish_import_batch(
-            state.import_batch_id,
-            scanned_files=state.scanned_files,
-            imported_tracks=state.imported_tracks,
-            duplicate_tracks=state.duplicate_tracks,
-            imported_lyrics=state.imported_lyrics,
-            matched_lyrics=state.matched_lyrics,
-            review_items=state.review_items,
-            errors=state.errors,
-            finished_at=end_time,
+        return run_import_path(
+            self,
+            repo,
+            source_path,
+            progress_callback=progress_callback,
+            control=control,
+            resume=resume,
         )
-        delete_resume_state(state_file)
-
-        report = ImportReport(
-            import_batch_id=state.import_batch_id,
-            source_path=str(source_path),
-            started_at=start_time,
-            finished_at=end_time,
-            scanned_files=state.scanned_files,
-            imported_tracks=state.imported_tracks,
-            duplicate_tracks=state.duplicate_tracks,
-            imported_lyrics=state.imported_lyrics,
-            matched_lyrics=state.matched_lyrics,
-            review_items=state.review_items,
-            errors=state.errors,
-            cancelled=False,
-            rollback_applied=False,
-            resume_available=False,
-            file_states=state.file_states,
-        )
-
-        self._write_manifest(report)
-        emit("done", force=True)
-        return report
 
     def _save_state(self, state_file: Path, repo: LibraryRepository, state: ResumeState) -> None:
+        """\u4fdd\u5b58\u65ad\u70b9\u6062\u590d\u72b6\u6001\u5e76\u540c\u6b65\u5bfc\u5165\u6279\u6b21\u8fdb\u5ea6\u3002"""
         from musearc.services.import_runtime import save_resume_state
 
         save_resume_state(state_file, state)
@@ -1414,6 +557,7 @@ class ImportService:
         )
 
     def _wait_control(self, control: ImportControl | None, emit, current_file: str) -> tuple[bool, str]:
+        """\u6839\u636e\u6682\u505c/\u53d6\u6d88\u63a7\u5236\u963b\u585e\u6216\u7ec8\u6b62\u5f53\u524d\u5bfc\u5165\u3002"""
         if control is None:
             return False, "keep"
         while control.is_paused():
@@ -1435,6 +579,7 @@ class ImportService:
         rollback: bool,
         emit,
     ) -> ImportReport:
+        """\u5904\u7406\u5bfc\u5165\u53d6\u6d88\uff0c\u652f\u6301\u4fdd\u7559\u8fdb\u5ea6\u6216\u56de\u6eda\u3002"""
         end_time = _utc_now()
         rollback_applied = False
         resume_available = True
@@ -1471,6 +616,7 @@ class ImportService:
         return report
 
     def _rollback_partial(self, repo: LibraryRepository, state: ResumeState) -> None:
+        """\u56de\u6eda\u5f53\u524d\u6279\u6b21\u5df2\u5199\u5165\u7684\u6570\u636e\u5e93\u548c\u6587\u4ef6\u53d8\u66f4\u3002"""
         repo.hard_delete_tracks(state.created_track_ids)
         repo.delete_lyrics_by_ids(state.created_lyrics_ids)
         repo.restore_tracks(state.soft_deleted_existing_ids)
@@ -1480,9 +626,11 @@ class ImportService:
                 target.unlink(missing_ok=True)
 
     def _enqueue_review(self, repo: LibraryRepository, item: ReviewItem) -> None:
+        """\u5411\u5ba1\u67e5\u961f\u5217\u5199\u5165\u4e00\u6761\u5ba1\u67e5\u9879\u3002"""
         repo.enqueue_review(new_id("rev"), item)
 
     def _write_manifest(self, report: ImportReport) -> None:
+        """\u5199\u5165\u5bfc\u5165\u62a5\u544a\u6e05\u5355\u6587\u4ef6\u3002"""
         manifests = self.library_root / "manifests" / "imports"
         manifests.mkdir(parents=True, exist_ok=True)
         target = manifests / f"{report.import_batch_id}.json"
