@@ -20,6 +20,7 @@ def _placeholders(size: int) -> str:
 FAVORITES_PLAYLIST_ID = "pl_favorites"
 FAVORITES_PLAYLIST_NAME = "收藏"
 DEFAULT_TAG_FIELD = "备注"
+DEFAULT_TAG_FIELDS = ("备注", "喜爱程度")
 
 
 def _safe_json_loads(value: str | None) -> dict:
@@ -68,10 +69,12 @@ class LibraryRepository:
         return out
 
     def ensure_default_tag_field(self) -> None:
-        self.conn.execute(
-            "INSERT OR IGNORE INTO tag_fields(tag_name, created_at) VALUES(?, ?)",
-            (DEFAULT_TAG_FIELD, _utc_now_iso()),
-        )
+        now = _utc_now_iso()
+        for name in DEFAULT_TAG_FIELDS:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO tag_fields(tag_name, created_at) VALUES(?, ?)",
+                (name, now),
+            )
 
     def list_tag_fields(self) -> list[dict]:
         self.ensure_default_tag_field()
@@ -104,7 +107,7 @@ class LibraryRepository:
         if not name:
             return 0
         self.ensure_default_tag_field()
-        if name == DEFAULT_TAG_FIELD:
+        if name in DEFAULT_TAG_FIELDS:
             return 0
         cursor = self.conn.execute("DELETE FROM tag_fields WHERE tag_name = ?", (name,))
         if cursor.rowcount <= 0:
@@ -341,7 +344,7 @@ class LibraryRepository:
         rows = self.conn.execute(
             f"""
             SELECT track_id, file_name, title, artist, album, language_kind, preference_level,
-                   duration_sec, quality_score, storage_relpath, source_relpath, source_fullpath,
+                   duration_sec, quality_score, storage_relpath, source_relpath, source_fullpath, source_sha256,
                    source_ext, storage_format, ext_json
             FROM tracks
             WHERE track_id IN ({placeholders})
@@ -579,6 +582,35 @@ class LibraryRepository:
             LEFT JOIN tracks t ON t.track_id = tl.track_id
             WHERE l.deleted_at IS NULL
             ORDER BY l.imported_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        out: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            src = str(item.get("source_relpath", "") or "")
+            item["file_name"] = src.replace("\\", "/").split("/")[-1] if src else ""
+            item["mapped_track"] = (
+                f"{item.get('mapped_track_file_name', '')} ({item.get('track_id', '')})"
+                if item.get("track_id") and item.get("mapped_track_file_name")
+                else ""
+            )
+            out.append(item)
+        return out
+
+    def list_deleted_lyrics(self, limit: int = 5000) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT l.lyrics_id, l.source_relpath, l.storage_relpath,
+                   l.lyrics_title, l.lyrics_artist, l.lyrics_album,
+                   l.lyrics_author, l.line_count, l.imported_at, l.deleted_at,
+                   t.track_id, t.file_name AS mapped_track_file_name
+            FROM lyrics l
+            LEFT JOIN track_lyrics tl ON tl.lyrics_id = l.lyrics_id AND tl.is_primary = 1
+            LEFT JOIN tracks t ON t.track_id = tl.track_id
+            WHERE l.deleted_at IS NOT NULL
+            ORDER BY l.deleted_at DESC
             LIMIT ?
             """,
             (limit,),
@@ -930,7 +962,7 @@ class LibraryRepository:
                 """
                 SELECT t.track_id, t.file_name, t.title, t.artist, t.album, t.language_kind,
                        t.preference_level, t.duration_sec, t.quality_score, t.source_ext, t.storage_format, t.ext_json,
-                       t.storage_relpath, t.source_relpath, t.source_fullpath,
+                       t.storage_relpath, t.source_relpath, t.source_fullpath, t.source_sha256,
                        l.source_relpath AS lyrics_source,
                        CASE WHEN EXISTS(
                          SELECT 1 FROM playlist_items fi
@@ -967,7 +999,7 @@ class LibraryRepository:
                 """
                 SELECT t.track_id, t.file_name, t.title, t.artist, t.album, t.language_kind,
                        t.preference_level, t.duration_sec, t.quality_score, t.source_ext, t.storage_format, t.ext_json,
-                       t.storage_relpath, t.source_relpath, t.source_fullpath,
+                       t.storage_relpath, t.source_relpath, t.source_fullpath, t.source_sha256,
                        l.source_relpath AS lyrics_source,
                        CASE WHEN EXISTS(
                          SELECT 1 FROM playlist_items fi

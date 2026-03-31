@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +48,75 @@ class MuseArcFacade:
             level=level,
             keep=10,
         )
+
+    @staticmethod
+    def _safe_int(value, default: int = 0) -> int:
+        if isinstance(value, (list, tuple, dict, set)):
+            return default
+        try:
+            return int(value or 0)
+        except Exception:
+            return default
+
+    @staticmethod
+    def _safe_nonneg_int(value, default: int = 0) -> int:
+        return max(0, MuseArcFacade._safe_int(value, default))
+
+    def _stats_state_path(self) -> Path:
+        base = self.ctx.layout.root / "manifests"
+        base.mkdir(parents=True, exist_ok=True)
+        return base / "stats_import_state.json"
+
+    def _load_stats_state(self) -> dict:
+        path = self._stats_state_path()
+        if not path.exists():
+            return {"history": [], "contributions": {}}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {"history": [], "contributions": {}}
+        if not isinstance(payload, dict):
+            return {"history": [], "contributions": {}}
+        history = payload.get("history")
+        contributions = payload.get("contributions")
+        if not isinstance(history, list):
+            history = []
+        if not isinstance(contributions, dict):
+            contributions = {}
+        return {"history": history, "contributions": contributions}
+
+    def _save_stats_state(self, payload: dict) -> None:
+        path = self._stats_state_path()
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _compute_love_score(
+        *,
+        play_count: int,
+        manual_play_count: int,
+        play_seconds: int,
+        early_skip_count: int,
+        total_play_count_all: int,
+        duration_sec: float,
+    ) -> int:
+        a = max(0, int(play_count))
+        b = max(0, int(manual_play_count))
+        c = max(0, int(play_seconds))
+        d = max(0, int(early_skip_count))
+        e = max(1, int(total_play_count_all))
+        f = max(1.0, float(duration_sec or 0.0))
+        a_safe = max(1, a)
+
+        # 平均播放比例 0.4
+        t1 = float(c) / f / float(a_safe)
+        # 主动播放比例 0.5
+        t2 = float(b) / float(a_safe)
+        # 全库播放占比 0.1
+        t3 = float(a) / float(e)
+        # 跳过比例 -1
+        t4 = float(d) / float(a_safe)
+        t = 0.1 * t3 + 0.4 * t1 + 0.5 * t2 - t4
+        return max(-100, min(100, int(round(t * 100.0))))
 
     def import_from(self, source_path: str, *, control: ImportControl | None = None, progress_callback=None) -> dict:
         source = Path(source_path).expanduser().resolve()
@@ -255,6 +325,291 @@ class MuseArcFacade:
         self._log(f"export_with_plan tracks={len(track_ids)} out={out}")
         return [str(p) for p in paths]
 
+    def export_playlist_package(self, track_ids: list[str], out_dir: str, *, playlist_name: str = "") -> str:
+        ids = [str(v) for v in track_ids if str(v)]
+        if not ids:
+            raise ValueError("empty_track_ids")
+        with self.ctx.db.session() as conn:
+            from musearc.infra.db.repositories import LibraryRepository
+
+            repo = LibraryRepository(conn)
+            rows = repo.get_tracks_by_ids(ids)
+            by_id = {str(r.get("track_id", "")): r for r in rows if r.get("track_id")}
+            ordered_rows = [by_id[tid] for tid in ids if tid in by_id]
+            exported_at = datetime.now(timezone.utc).isoformat()
+            hash_seed = f"{'|'.join(ids)}|{exported_at}"
+            playlist_hash = hashlib.sha1(hash_seed.encode("utf-8")).hexdigest()
+            tracks_out: list[dict] = []
+            for row in ordered_rows:
+                track_id = str(row.get("track_id", "") or "")
+                lyrics = repo.primary_lyrics_for_track(track_id) or {}
+                tracks_out.append(
+                    {
+                        "track_id": track_id,
+                        "storage_relpath": str(row.get("storage_relpath", "") or ""),
+                        "title": str(row.get("title", "") or ""),
+                        "artist": str(row.get("artist", "") or ""),
+                        "album": str(row.get("album", "") or ""),
+                        "lyrics_storage_relpath": str(lyrics.get("storage_relpath", "") or ""),
+                        "source_sha256": str(row.get("source_sha256", "") or ""),
+                        "stats": {
+                            "play_count": 0,
+                            "manual_play_count": 0,
+                            "play_seconds": 0,
+                            "early_skip_count": 0,
+                        },
+                    }
+                )
+
+        out_root = Path(out_dir).expanduser().resolve()
+        out_root.mkdir(parents=True, exist_ok=True)
+        safe_name = "".join(ch if ch not in "\\/:*?\"<>|" else "_" for ch in (playlist_name.strip() or "playlist")).strip()
+        if not safe_name:
+            safe_name = "playlist"
+        file_path = out_root / f"{safe_name}_{playlist_hash[:10]}.muse_playlist.json"
+        payload = {
+            "schema": "musearc_playlist_export_v1",
+            "playlist_hash": playlist_hash,
+            "playlist_name": playlist_name.strip(),
+            "exported_at": exported_at,
+            "database_location": str(self.library_root),
+            "track_count": len(tracks_out),
+            "stats_summary": {},
+            "tracks": tracks_out,
+        }
+        file_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._log(f"export_playlist_package tracks={len(tracks_out)} file={file_path}")
+        return str(file_path)
+
+    def list_stats_import_history(self, limit: int = 200) -> list[dict]:
+        state = self._load_stats_state()
+        rows = [r for r in state.get("history", []) if isinstance(r, dict)]
+        rows.sort(key=lambda r: str(r.get("imported_at", "")), reverse=True)
+        return rows[: max(1, int(limit))]
+
+    def import_playlist_stats(self, file_path: str) -> dict:
+        path = Path(file_path).expanduser().resolve()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("invalid_stats_payload")
+        schema = str(payload.get("schema", "") or "")
+        if schema != "musearc_playlist_export_v1":
+            raise ValueError(f"unsupported_schema:{schema}")
+        playlist_hash = str(payload.get("playlist_hash", "") or "").strip()
+        if not playlist_hash:
+            raise ValueError("missing_playlist_hash")
+        tracks_raw = payload.get("tracks")
+        if not isinstance(tracks_raw, list):
+            tracks_raw = []
+
+        with self.ctx.db.session() as conn:
+            from musearc.infra.db.repositories import LibraryRepository
+
+            repo = LibraryRepository(conn)
+            all_rows = repo.list_tracks(limit=2_000_000)
+            by_id = {str(r.get("track_id", "")): r for r in all_rows if r.get("track_id")}
+            by_storage = {str(r.get("storage_relpath", "")).replace("\\", "/"): r for r in all_rows if str(r.get("storage_relpath", "")).strip()}
+            by_sha = {str(r.get("source_sha256", "")).strip().lower(): r for r in all_rows if str(r.get("source_sha256", "")).strip()}
+
+            state = self._load_stats_state()
+            history = [r for r in state.get("history", []) if isinstance(r, dict)]
+            contributions = state.get("contributions")
+            if not isinstance(contributions, dict):
+                contributions = {}
+
+            impacted_track_ids: set[str] = set()
+            for track_id, mapping in list(contributions.items()):
+                if not isinstance(mapping, dict):
+                    continue
+                if playlist_hash in mapping:
+                    mapping.pop(playlist_hash, None)
+                    impacted_track_ids.add(str(track_id))
+                if not mapping:
+                    contributions.pop(track_id, None)
+
+            applied = 0
+            skipped = 0
+            imported_track_ids: set[str] = set()
+            for item in tracks_raw:
+                if not isinstance(item, dict):
+                    skipped += 1
+                    continue
+                tid = str(item.get("track_id", "") or "").strip()
+                storage_rel = str(item.get("storage_relpath", "") or "").replace("\\", "/").strip()
+                source_sha256 = str(item.get("source_sha256", "") or "").strip().lower()
+                row = None
+                if source_sha256:
+                    row = by_sha.get(source_sha256)
+                if row is None and tid:
+                    row = by_id.get(tid)
+                if row is None and storage_rel:
+                    row = by_storage.get(storage_rel)
+                if row is None:
+                    skipped += 1
+                    continue
+                real_tid = str(row.get("track_id", "") or "")
+                stats = item.get("stats")
+                if not isinstance(stats, dict):
+                    stats = {}
+                stat_payload = {
+                    "play_count": self._safe_nonneg_int(stats.get("play_count", 0), 0),
+                    "manual_play_count": self._safe_nonneg_int(stats.get("manual_play_count", 0), 0),
+                    "play_seconds": self._safe_nonneg_int(stats.get("play_seconds", 0), 0),
+                    "early_skip_count": self._safe_nonneg_int(stats.get("early_skip_count", 0), 0),
+                }
+                track_map = contributions.get(real_tid)
+                if not isinstance(track_map, dict):
+                    track_map = {}
+                track_map[playlist_hash] = stat_payload
+                contributions[real_tid] = track_map
+                imported_track_ids.add(real_tid)
+                impacted_track_ids.add(real_tid)
+                applied += 1
+
+            total_play_count_all = 0
+            for row_map in contributions.values():
+                if not isinstance(row_map, dict):
+                    continue
+                for v in row_map.values():
+                    if not isinstance(v, dict):
+                        continue
+                    total_play_count_all += self._safe_nonneg_int(v.get("play_count", 0), 0)
+
+            for tid in impacted_track_ids:
+                row_map = contributions.get(tid)
+                if not isinstance(row_map, dict):
+                    row_map = {}
+                total = {"play_count": 0, "manual_play_count": 0, "play_seconds": 0, "early_skip_count": 0}
+                for v in row_map.values():
+                    if not isinstance(v, dict):
+                        continue
+                    total["play_count"] += self._safe_nonneg_int(v.get("play_count", 0), 0)
+                    total["manual_play_count"] += self._safe_nonneg_int(v.get("manual_play_count", 0), 0)
+                    total["play_seconds"] += self._safe_nonneg_int(v.get("play_seconds", 0), 0)
+                    total["early_skip_count"] += self._safe_nonneg_int(v.get("early_skip_count", 0), 0)
+                duration_sec = 0.0
+                row = by_id.get(tid)
+                if row:
+                    try:
+                        duration_sec = float(row.get("duration_sec", 0.0) or 0.0)
+                    except Exception:
+                        duration_sec = 0.0
+                love_score = self._compute_love_score(
+                    play_count=total["play_count"],
+                    manual_play_count=total["manual_play_count"],
+                    play_seconds=total["play_seconds"],
+                    early_skip_count=total["early_skip_count"],
+                    total_play_count_all=total_play_count_all,
+                    duration_sec=duration_sec,
+                )
+                repo.update_track_tag_values([tid], "播放次数", str(total["play_count"]))
+                repo.update_track_tag_values([tid], "指定播放次数", str(total["manual_play_count"]))
+                repo.update_track_tag_values([tid], "播放秒数", str(total["play_seconds"]))
+                repo.update_track_tag_values([tid], "早期跳过次数", str(total["early_skip_count"]))
+                repo.update_track_tag_values([tid], "喜爱程度", str(love_score))
+
+            now_iso = datetime.now(timezone.utc).isoformat()
+            history = [r for r in history if str(r.get("playlist_hash", "")) != playlist_hash]
+            history.append(
+                {
+                    "playlist_hash": playlist_hash,
+                    "source_file": str(path),
+                    "imported_at": now_iso,
+                    "applied_tracks": len(imported_track_ids),
+                    "skipped_rows": skipped,
+                }
+            )
+            history.sort(key=lambda r: str(r.get("imported_at", "")), reverse=True)
+            history = history[:500]
+            self._save_stats_state({"history": history, "contributions": contributions})
+
+        self._redo_actions.clear()
+        self._log(f"import_playlist_stats hash={playlist_hash} applied={applied} skipped={skipped}")
+        return {
+            "playlist_hash": playlist_hash,
+            "applied_tracks": applied,
+            "skipped_rows": skipped,
+            "source_file": str(path),
+        }
+
+    def recompute_love_score_tag(self) -> int:
+        updated = 0
+        with self.ctx.db.session() as conn:
+            from musearc.infra.db.repositories import LibraryRepository
+
+            repo = LibraryRepository(conn)
+            rows = repo.list_tracks(limit=2_000_000)
+            total_play_count_all = 0
+            for row in rows:
+                tags = row.get("tags")
+                if not isinstance(tags, dict):
+                    continue
+                total_play_count_all += self._safe_nonneg_int(tags.get("播放次数", 0), 0)
+
+            for row in rows:
+                track_id = str(row.get("track_id", "") or "")
+                if not track_id:
+                    continue
+                tags = row.get("tags")
+                if not isinstance(tags, dict):
+                    tags = {}
+                play_count = self._safe_nonneg_int(tags.get("播放次数", 0), 0)
+                manual_play_count = self._safe_nonneg_int(tags.get("指定播放次数", 0), 0)
+                play_seconds = self._safe_nonneg_int(tags.get("播放秒数", 0), 0)
+                early_skip_count = self._safe_nonneg_int(tags.get("早期跳过次数", 0), 0)
+                try:
+                    duration_sec = float(row.get("duration_sec", 0.0) or 0.0)
+                except Exception:
+                    duration_sec = 0.0
+                love_score = self._compute_love_score(
+                    play_count=play_count,
+                    manual_play_count=manual_play_count,
+                    play_seconds=play_seconds,
+                    early_skip_count=early_skip_count,
+                    total_play_count_all=total_play_count_all,
+                    duration_sec=duration_sec,
+                )
+                repo.update_track_tag_values([track_id], "喜爱程度", str(love_score))
+                updated += 1
+        if updated > 0:
+            self._redo_actions.clear()
+            self._log(f"recompute_love_score_tag updated={updated}")
+        return updated
+
+    def sync_preference_from_love_tag(self) -> int:
+        updated = 0
+        with self.ctx.db.session() as conn:
+            from musearc.infra.db.repositories import LibraryRepository
+
+            repo = LibraryRepository(conn)
+            rows = repo.list_tracks(limit=2_000_000)
+            for row in rows:
+                track_id = str(row.get("track_id", "") or "")
+                if not track_id:
+                    continue
+                tags = row.get("tags")
+                if not isinstance(tags, dict):
+                    continue
+                raw_love = str(tags.get("喜爱程度", "")).strip()
+                if not raw_love:
+                    continue
+                try:
+                    love_value = float(raw_love)
+                except Exception:
+                    continue
+                # 需求：喜爱程度 -> 喜好(1-10) 使用除以10后四舍五入。
+                pref_value = int((love_value / 10) + 0.5)
+                pref_value = max(1, min(10, pref_value))
+                current_pref = self._safe_int(row.get("preference_level", 0), 0)
+                if current_pref == pref_value:
+                    continue
+                repo.update_tracks_fields([track_id], {"preference_level": pref_value})
+                updated += 1
+        if updated > 0:
+            self._redo_actions.clear()
+            self._log(f"sync_preference_from_love_tag updated={updated}")
+        return updated
+
     def pending_reviews(self, limit: int = 100) -> list[dict]:
         with self.ctx.db.session() as conn:
             from musearc.infra.db.repositories import LibraryRepository
@@ -316,44 +671,81 @@ class MuseArcFacade:
     def delete_tracks(self, track_ids: list[str], *, mode: str = "move_linked_lyrics") -> int:
         delete_mode = mode if mode in {"move_linked_lyrics", "unlink_only"} else "move_linked_lyrics"
         count = 0
-        deleted_track_relpaths: list[str] = []
-        deleted_lyrics_relpaths: list[str] = []
         with self.ctx.db.session() as conn:
             from musearc.infra.db.repositories import LibraryRepository
 
             repo = LibraryRepository(conn)
             affected = repo.get_tracks_by_ids(track_ids)
-            if delete_mode == "move_linked_lyrics":
-                deleted_lyrics_relpaths = repo.linked_lyrics_storage_relpaths_for_tracks(track_ids)
             count = LibraryOpsService(repo).delete_tracks(track_ids, mode=delete_mode)
             if count > 0:
-                deleted_track_relpaths = [
-                    str(r.get("storage_relpath", "") or "") for r in affected if str(r.get("storage_relpath", "")).strip()
-                ]
                 self._append_undo(
                     repo,
                     "soft_delete_tracks",
                     {"track_ids": [r["track_id"] for r in affected], "mode": delete_mode},
                 )
                 self._log(f"delete_tracks count={count} mode={delete_mode}")
-        if count > 0:
-            for rel in deleted_track_relpaths:
-                try:
-                    (self.ctx.layout.root / rel).unlink(missing_ok=True)
-                except Exception:
-                    pass
-            for rel in deleted_lyrics_relpaths:
-                try:
-                    (self.ctx.layout.root / rel).unlink(missing_ok=True)
-                except Exception:
-                    pass
         return count
 
-    def list_deleted_tracks(self, limit: int = 5000) -> list[dict]:
+    def list_deleted_tracks(self, limit: int = 5000, *, include_missing: bool = True) -> list[dict]:
         with self.ctx.db.session() as conn:
             from musearc.infra.db.repositories import LibraryRepository
 
-            return LibraryOpsService(LibraryRepository(conn)).list_deleted_tracks(limit)
+            rows = LibraryOpsService(LibraryRepository(conn)).list_deleted_tracks(limit)
+        if include_missing:
+            return rows
+        visible: list[dict] = []
+        for row in rows:
+            rel = str(row.get("storage_relpath", "") or "").strip()
+            if not rel:
+                visible.append(row)
+                continue
+            if (self.ctx.layout.root / rel).exists():
+                visible.append(row)
+        return visible
+
+    def list_deleted_items(self, limit: int = 5000) -> list[dict]:
+        with self.ctx.db.session() as conn:
+            from musearc.infra.db.repositories import LibraryRepository
+
+            repo = LibraryRepository(conn)
+            tracks = repo.list_deleted_tracks(limit=limit)
+            lyrics = repo.list_deleted_lyrics(limit=limit)
+
+        out: list[dict] = []
+        for row in tracks:
+            rel = str(row.get("storage_relpath", "") or "").strip()
+            out.append(
+                {
+                    "item_type": "track",
+                    "item_type_label": "歌曲",
+                    "item_id": str(row.get("track_id", "") or ""),
+                    "file_name": str(row.get("file_name", "") or ""),
+                    "title": str(row.get("title", "") or ""),
+                    "artist": str(row.get("artist", "") or ""),
+                    "album": str(row.get("album", "") or ""),
+                    "storage_relpath": rel,
+                    "deleted_at": str(row.get("deleted_at", "") or ""),
+                    "file_exists": bool(rel and (self.ctx.layout.root / rel).exists()),
+                }
+            )
+        for row in lyrics:
+            rel = str(row.get("storage_relpath", "") or "").strip()
+            out.append(
+                {
+                    "item_type": "lyrics",
+                    "item_type_label": "歌词",
+                    "item_id": str(row.get("lyrics_id", "") or ""),
+                    "file_name": str(row.get("file_name", "") or ""),
+                    "title": str(row.get("lyrics_title", "") or ""),
+                    "artist": str(row.get("lyrics_artist", "") or ""),
+                    "album": str(row.get("lyrics_album", "") or ""),
+                    "storage_relpath": rel,
+                    "deleted_at": str(row.get("deleted_at", "") or ""),
+                    "file_exists": bool(rel and (self.ctx.layout.root / rel).exists()),
+                }
+            )
+        out.sort(key=lambda r: str(r.get("deleted_at", "")), reverse=True)
+        return out[: max(1, int(limit))]
 
     def restore_tracks(self, track_ids: list[str]) -> int:
         with self.ctx.db.session() as conn:
@@ -370,25 +762,67 @@ class MuseArcFacade:
         ids = [str(v) for v in track_ids if str(v)]
         if not ids:
             return 0
-        deleted_rows = {str(r.get("track_id", "")): r for r in self.list_deleted_tracks(limit=2_000_000)}
-        removed = 0
+        deleted_rows = {str(r.get("track_id", "")): r for r in self.list_deleted_tracks(limit=2_000_000, include_missing=True)}
+        processed = 0
         for tid in ids:
             row = deleted_rows.get(tid) or {}
+            if not row:
+                continue
+            processed += 1
             rel = str(row.get("storage_relpath", "") or "")
             if not rel:
                 continue
             target = self.ctx.layout.root / rel
-            if not target.exists():
-                continue
             try:
                 target.unlink(missing_ok=True)
-                removed += 1
             except Exception:
                 continue
-        if removed > 0:
+        if processed > 0:
             self._redo_actions.clear()
-            self._log(f"purge_deleted_track_files count={removed}")
-        return removed
+            self._log(f"purge_deleted_track_files count={processed}")
+        return processed
+
+    def purge_deleted_lyrics_files(self, lyrics_ids: list[str]) -> int:
+        ids = [str(v) for v in lyrics_ids if str(v)]
+        if not ids:
+            return 0
+        with self.ctx.db.session() as conn:
+            from musearc.infra.db.repositories import LibraryRepository
+
+            rows = LibraryRepository(conn).list_deleted_lyrics(limit=2_000_000)
+        deleted_rows = {str(r.get("lyrics_id", "")): r for r in rows}
+        processed = 0
+        for lid in ids:
+            row = deleted_rows.get(lid) or {}
+            if not row:
+                continue
+            processed += 1
+            rel = str(row.get("storage_relpath", "") or "")
+            if not rel:
+                continue
+            target = self.ctx.layout.root / rel
+            try:
+                target.unlink(missing_ok=True)
+            except Exception:
+                continue
+        if processed > 0:
+            self._redo_actions.clear()
+            self._log(f"purge_deleted_lyrics_files count={processed}")
+        return processed
+
+    def restore_deleted_items(self, items: list[dict]) -> dict:
+        track_ids = [str(i.get("item_id", "")) for i in items if str(i.get("item_type", "")) == "track" and i.get("item_id")]
+        lyrics_ids = [str(i.get("item_id", "")) for i in items if str(i.get("item_type", "")) == "lyrics" and i.get("item_id")]
+        track_count = self.restore_tracks(track_ids) if track_ids else 0
+        lyrics_count = self.restore_lyrics(lyrics_ids) if lyrics_ids else 0
+        return {"tracks": track_count, "lyrics": lyrics_count, "total": track_count + lyrics_count}
+
+    def purge_deleted_item_files(self, items: list[dict]) -> dict:
+        track_ids = [str(i.get("item_id", "")) for i in items if str(i.get("item_type", "")) == "track" and i.get("item_id")]
+        lyrics_ids = [str(i.get("item_id", "")) for i in items if str(i.get("item_type", "")) == "lyrics" and i.get("item_id")]
+        track_count = self.purge_deleted_track_files(track_ids) if track_ids else 0
+        lyrics_count = self.purge_deleted_lyrics_files(lyrics_ids) if lyrics_ids else 0
+        return {"tracks": track_count, "lyrics": lyrics_count, "total": track_count + lyrics_count}
 
     def update_tracks_fields(self, track_ids: list[str], fields: dict[str, object]) -> int:
         with self.ctx.db.session() as conn:
@@ -724,11 +1158,6 @@ class MuseArcFacade:
             relpaths = LibraryOpsService(repo).delete_lyrics(lyrics_ids)
             if relpaths:
                 self._append_undo(repo, "delete_lyrics", {"lyrics_ids": lyrics_ids, "relpaths": relpaths})
-        for rel in relpaths:
-            try:
-                (self.ctx.layout.root / rel).unlink(missing_ok=True)
-            except Exception:
-                pass
         if relpaths:
             self._redo_actions.clear()
             self._log(f"move_lyrics_to_trash count={len(relpaths)}")

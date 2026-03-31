@@ -316,7 +316,7 @@ class TrackTableModel(QAbstractTableModel):
 
         self._schedule_rebuild()
         if track_id:
-            self.track_field_edited.emit(track_id, emit_key, emit_value)
+            QTimer.singleShot(0, lambda tid=track_id, k=emit_key, v=emit_value: self.track_field_edited.emit(tid, k, v))
         return True
 
     def set_tracks(self, rows: list[dict]) -> None:
@@ -537,6 +537,14 @@ class TrackTableModel(QAbstractTableModel):
             return f"id:{prefix}", prefix
 
         if key.startswith("tag:"):
+            tag_name = key.split(":", 1)[1] if ":" in key else key
+            if tag_name == "喜爱程度":
+                score = _safe_int_value(row.get(key, 0), 0)
+                score = max(0, min(100, score))
+                bucket = (score // 10) * 10
+                upper = min(100, bucket + 9)
+                label = f"{bucket}~{upper}"
+                return f"{key}:{bucket}", label
             value = str(row.get(key, "") or "(空)")
             return f"{key}:{value}", value
 

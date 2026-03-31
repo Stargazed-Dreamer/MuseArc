@@ -252,8 +252,10 @@ class ImportManagementPage(QWidget):
         row1 = QHBoxLayout()
         self.btn_new_import = QPushButton("导入来源")
         self.btn_resume_import = QPushButton("继续未完成导入")
+        self.btn_import_stats = QPushButton("导入统计数据")
         row1.addWidget(self.btn_new_import)
         row1.addWidget(self.btn_resume_import)
+        row1.addWidget(self.btn_import_stats)
         row1.addStretch(1)
 
         box = QVBoxLayout()
@@ -307,15 +309,41 @@ class ImportManagementPage(QWidget):
         self.history_table.horizontalHeader().setStretchLastSection(True)
         _install_copy_support(self.history_table)
 
+        self.stats_model = DictTableModel(
+            [
+                ColumnDef("imported_at", "导入时间"),
+                ColumnDef("playlist_hash", "歌单哈希"),
+                ColumnDef("applied_tracks", "生效歌曲"),
+                ColumnDef("skipped_rows", "跳过"),
+                ColumnDef("source_file", "来源文件"),
+            ]
+        )
+        self.stats_table = QTableView()
+        self.stats_table.setModel(self.stats_model)
+        self.stats_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.stats_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.stats_table.setAlternatingRowColors(True)
+        self.stats_table.horizontalHeader().setStretchLastSection(True)
+        _install_copy_support(self.stats_table)
+
         root.addLayout(row1)
         root.addLayout(box)
         root.addWidget(self.queue_label)
         root.addWidget(self.queue_list)
-        root.addWidget(QLabel("导入历史"))
-        root.addWidget(self.history_table, 1)
+        history_row = QHBoxLayout()
+        left_hist = QVBoxLayout()
+        left_hist.addWidget(QLabel("导入历史"))
+        left_hist.addWidget(self.history_table, 1)
+        right_hist = QVBoxLayout()
+        right_hist.addWidget(QLabel("统计导入历史"))
+        right_hist.addWidget(self.stats_table, 1)
+        history_row.addLayout(left_hist, 3)
+        history_row.addLayout(right_hist, 2)
+        root.addLayout(history_row, 1)
 
         self.btn_new_import.clicked.connect(self.on_import)
         self.btn_resume_import.clicked.connect(self.on_resume_import)
+        self.btn_import_stats.clicked.connect(self.on_import_stats)
         self.btn_pause_resume.clicked.connect(self._on_pause_resume_import)
         self.btn_cancel.clicked.connect(self._on_cancel_import)
         self.btn_detail.clicked.connect(self._open_running_detail)
@@ -325,7 +353,7 @@ class ImportManagementPage(QWidget):
         self._refresh_queue_view()
 
     def apply_button_scale(self, scale: float) -> None:
-        for btn in [self.btn_new_import, self.btn_resume_import, self.btn_pause_resume, self.btn_cancel, self.btn_detail]:
+        for btn in [self.btn_new_import, self.btn_resume_import, self.btn_import_stats, self.btn_pause_resume, self.btn_cancel, self.btn_detail]:
             _apply_button_scale(btn, scale)
 
     def set_facade(self, facade: MuseArcFacade) -> None:
@@ -340,6 +368,11 @@ class ImportManagementPage(QWidget):
     def reload_history(self) -> None:
         rows = self.facade.list_import_batches(limit=1000)
         self.history_model.set_rows(rows)
+        self.reload_stats_history()
+
+    def reload_stats_history(self) -> None:
+        rows = self.facade.list_stats_import_history(limit=500)
+        self.stats_model.set_rows(rows)
 
     def _ensure_detail_dialog(self) -> ImportTaskDetailDialog:
         if self._detail_dialog is None:
@@ -406,6 +439,23 @@ class ImportManagementPage(QWidget):
         source = action_map.get(chosen)
         if source:
             self._enqueue_source(source)
+
+    def on_import_stats(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(self, "选择统计数据文件", "", "JSON (*.json);;All Files (*)")
+        if not file_path:
+            return
+        try:
+            result = self.facade.import_playlist_stats(file_path)
+        except Exception as exc:
+            QMessageBox.warning(self, "导入统计数据", str(exc))
+            return
+        self.reload_stats_history()
+        self.library_changed.emit()
+        QMessageBox.information(
+            self,
+            "导入统计数据",
+            f"歌单哈希: {result.get('playlist_hash','')}\n生效歌曲: {result.get('applied_tracks',0)}\n跳过: {result.get('skipped_rows',0)}",
+        )
 
     def _enqueue_source(self, source_path: str) -> None:
         source = str(Path(source_path).resolve())

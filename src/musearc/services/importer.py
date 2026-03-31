@@ -330,6 +330,8 @@ class ImportService:
             vector: list[int] = []
         else:
             vector = self.dependencies.fingerprint._fingerprint_vector(samples, decoded.sample_rate)
+        if not vector:
+            raise MediaCommandError(f"chromaprint_unavailable_or_failed:{source_path}")
 
         payload = self.dependencies.fingerprint.encode_vector(vector)
         digest = hashlib.sha1(payload.encode("ascii")).hexdigest()

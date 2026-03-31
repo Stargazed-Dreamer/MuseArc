@@ -125,3 +125,6 @@ class DbManager:
         conn.execute(
             "INSERT OR IGNORE INTO tag_fields(tag_name, created_at) VALUES('备注', datetime('now'))"
         )
+        conn.execute(
+            "INSERT OR IGNORE INTO tag_fields(tag_name, created_at) VALUES('喜爱程度', datetime('now'))"
+        )

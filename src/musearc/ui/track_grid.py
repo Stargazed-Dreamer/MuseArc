@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from PySide6.QtCore import QItemSelectionModel, QModelIndex, Qt, Signal
+from PySide6.QtCore import QItemSelectionModel, QModelIndex, Qt, QTimer, Signal
 from PySide6.QtGui import QKeyEvent, QKeySequence, QMouseEvent, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -812,7 +812,7 @@ class LyricsTableModel(DictTableModel):
         self.dataChanged.emit(index, index)
         lyrics_id = str(row.get("lyrics_id", "") or "")
         if lyrics_id:
-            self.lyrics_field_edited.emit(lyrics_id, key, new_value)
+            QTimer.singleShot(0, lambda lid=lyrics_id, k=key, v=new_value: self.lyrics_field_edited.emit(lid, k, v))
         return True
 
 

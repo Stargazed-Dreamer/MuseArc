@@ -258,11 +258,15 @@ def _choose_or_create_playlist(
     if not chosen:
         return None
     if action_new is not None and chosen == action_new:
-        name, ok = QInputDialog.getText(parent, "新建歌单", "歌单名称")
-        if not ok or not name.strip():
-            return None
-        return facade.create_playlist(name.strip())
+        return _prompt_new_playlist(parent, facade)
     return action_map.get(chosen)
+
+
+def _prompt_new_playlist(parent: QWidget, facade: MuseArcFacade, *, title: str = "新建歌单") -> str | None:
+    name, ok = QInputDialog.getText(parent, title, "歌单名称")
+    if not ok or not name.strip():
+        return None
+    return facade.create_playlist(name.strip())
 
 
 class TrackPickerDialog(QDialog):
@@ -417,5 +421,175 @@ class ExportPlanDialog(QDialog):
         for track_id, combo in self._combo_by_track_id.items():
             out[track_id] = str(combo.currentText() or "original")
         return out
+
+
+class ExportConfigDialog(QDialog):
+    def __init__(self, parent: QWidget, tracks: list[dict], *, default_name: str = "playlist"):
+        super().__init__(parent)
+        self.setWindowTitle("导出配置")
+        self.resize(980, 700)
+        self._combo_by_track_id: dict[str, QComboBox] = {}
+        self._tracks = list(tracks)
+        self._default_name = default_name.strip() or "playlist"
+
+        root = QVBoxLayout(self)
+
+        path_row = QHBoxLayout()
+        path_row.addWidget(QLabel("导出路径"))
+        self.path_input = QLineEdit()
+        self.btn_browse = QPushButton("浏览...")
+        path_row.addWidget(self.path_input, 1)
+        path_row.addWidget(self.btn_browse)
+
+        mode_row = QHBoxLayout()
+        self.chk_files = QCheckBox("导出为多个音频文件")
+        self.chk_playlist = QCheckBox("导出为歌单清单(JSON)")
+        self.chk_files.setChecked(True)
+        self.chk_playlist.setChecked(True)
+        mode_row.addWidget(self.chk_files)
+        mode_row.addWidget(self.chk_playlist)
+        mode_row.addStretch(1)
+
+        self.playlist_hint = QLabel("歌单清单将包含数据库路径、歌词路径、统计占位字段与歌单唯一哈希。")
+        self.playlist_hint.setStyleSheet("color:#5d6f86;")
+        self.playlist_hint.setVisible(False)
+
+        row_set = QHBoxLayout()
+        self.btn_all_original = QPushButton("整列设为源格式")
+        self.btn_all_mp3 = QPushButton("整列设为mp3")
+        self.btn_all_opus = QPushButton("整列设为opus")
+        self.btn_all_flac = QPushButton("整列设为flac")
+        self.btn_all_wav = QPushButton("整列设为wav")
+        self.btn_all_ogg = QPushButton("整列设为ogg")
+        for btn in [
+            self.btn_all_original,
+            self.btn_all_mp3,
+            self.btn_all_opus,
+            self.btn_all_flac,
+            self.btn_all_wav,
+            self.btn_all_ogg,
+        ]:
+            row_set.addWidget(btn)
+        row_set.addStretch(1)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["歌曲", "导出格式", "track_id"])
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setRootIsDecorated(False)
+        for row in self._tracks:
+            track_id = str(row.get("track_id", "") or "")
+            label = f"{row.get('artist', '')} - {row.get('title', '')} ({row.get('file_name', '')})"
+            item = QTreeWidgetItem([label, "", track_id])
+            self.tree.addTopLevelItem(item)
+            combo = QComboBox()
+            combo.addItems(["源格式", "mp3", "opus", "flac", "wav", "ogg"])
+            combo.setCurrentText("源格式")
+            self.tree.setItemWidget(item, 1, combo)
+            if track_id:
+                self._combo_by_track_id[track_id] = combo
+        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+
+        root.addLayout(path_row)
+        root.addLayout(mode_row)
+        root.addWidget(self.playlist_hint)
+        root.addLayout(row_set)
+        root.addWidget(self.tree, 1)
+        root.addWidget(self.buttons)
+
+        self.btn_browse.clicked.connect(self._choose_folder)
+        self.chk_files.toggled.connect(self._apply_mode_visibility)
+        self.chk_playlist.toggled.connect(self._apply_mode_visibility)
+        self.btn_all_original.clicked.connect(lambda: self._apply_all("源格式"))
+        self.btn_all_mp3.clicked.connect(lambda: self._apply_all("mp3"))
+        self.btn_all_opus.clicked.connect(lambda: self._apply_all("opus"))
+        self.btn_all_flac.clicked.connect(lambda: self._apply_all("flac"))
+        self.btn_all_wav.clicked.connect(lambda: self._apply_all("wav"))
+        self.btn_all_ogg.clicked.connect(lambda: self._apply_all("ogg"))
+        self.buttons.accepted.connect(self._on_accept)
+        self.buttons.rejected.connect(self.reject)
+
+        self.path_input.setText(str(Path.cwd()))
+        self._apply_mode_visibility()
+
+    def _choose_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "选择导出目录", self.path_input.text().strip() or str(Path.cwd()))
+        if folder:
+            self.path_input.setText(folder)
+
+    def _apply_mode_visibility(self) -> None:
+        files_mode = bool(self.chk_files.isChecked())
+        playlist_mode = bool(self.chk_playlist.isChecked())
+        self.tree.setVisible(files_mode)
+        self.playlist_hint.setVisible(playlist_mode)
+        for btn in [
+            self.btn_all_original,
+            self.btn_all_mp3,
+            self.btn_all_opus,
+            self.btn_all_flac,
+            self.btn_all_wav,
+            self.btn_all_ogg,
+        ]:
+            btn.setVisible(files_mode)
+
+    def _apply_all(self, text: str) -> None:
+        for combo in self._combo_by_track_id.values():
+            combo.setCurrentText(text)
+
+    def _on_accept(self) -> None:
+        out_dir = self.output_dir()
+        if not out_dir:
+            QMessageBox.warning(self, "导出配置", "请选择导出目录。")
+            return
+        if not self.export_files_enabled() and not self.export_playlist_enabled():
+            QMessageBox.warning(self, "导出配置", "请至少勾选一种导出方式。")
+            return
+        self.accept()
+
+    def output_dir(self) -> str:
+        return str(self.path_input.text().strip())
+
+    def export_files_enabled(self) -> bool:
+        return bool(self.chk_files.isChecked())
+
+    def export_playlist_enabled(self) -> bool:
+        return bool(self.chk_playlist.isChecked())
+
+    def export_plan(self) -> dict[str, str]:
+        mapping = {
+            "源格式": "original",
+            "mp3": "mp3",
+            "opus": "opus",
+            "flac": "flac",
+            "wav": "wav",
+            "ogg": "ogg",
+        }
+        out: dict[str, str] = {}
+        for track_id, combo in self._combo_by_track_id.items():
+            text = str(combo.currentText() or "源格式")
+            out[track_id] = mapping.get(text, "original")
+        return out
+
+
+def _run_export_dialog(parent: QWidget, facade: MuseArcFacade, tracks: list[dict], *, playlist_name: str = "") -> tuple[bool, str]:
+    track_ids = [str(t.get("track_id", "")) for t in tracks if t.get("track_id")]
+    if not track_ids:
+        QMessageBox.warning(parent, "导出", "请先选择歌曲")
+        return False, ""
+    dlg = ExportConfigDialog(parent, tracks, default_name=playlist_name or "playlist")
+    if dlg.exec() != QDialog.DialogCode.Accepted:
+        return False, ""
+    out_dir = dlg.output_dir()
+    outputs: list[str] = []
+    if dlg.export_playlist_enabled():
+        file_path = facade.export_playlist_package(track_ids, out_dir, playlist_name=playlist_name or "playlist")
+        outputs.append(file_path)
+    if dlg.export_files_enabled():
+        facade.export_with_plan(track_ids, out_dir, dlg.export_plan(), bitrate="320k")
+        outputs.append(out_dir)
+    return True, " ; ".join(outputs) if outputs else out_dir
 
 

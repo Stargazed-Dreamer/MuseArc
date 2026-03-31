@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from musearc.app.facade import FAVORITES_PLAYLIST_ID, MuseArcFacade
-from musearc.ui.table_models import ColumnDef
+from musearc.ui.table_models import ColumnDef, DictTableModel
 from musearc.ui.track_grid import (
     LyricsTableModel,
     TrackGridWidget,
@@ -38,13 +38,13 @@ from musearc.ui.track_grid import (
     _safe_int,
 )
 from musearc.ui.main_window_helpers import (
-    ExportPlanDialog,
     TrackPickerDialog,
     _apply_button_scale,
-    _ask_export_format,
     _choose_or_create_playlist,
+    _prompt_new_playlist,
     _resolve_delete_mode_and_maybe_save_default,
     _reveal_in_file_manager,
+    _run_export_dialog,
     _show_track_details,
     _storage_path_for_track_row,
 )
@@ -159,24 +159,14 @@ class TracksPage(QWidget):
         if not track_ids:
             QMessageBox.warning(self, "导出", "请先选择歌曲")
             return
-        out_dir = QFileDialog.getExistingDirectory(self, "选择导出目录")
-        if not out_dir:
-            return
-        fmt, ok = _ask_export_format(self, self.btn_export)
+        track_rows = list(tracks or [])
+        if not track_rows:
+            id_set = set(track_ids)
+            track_rows = [row for row in self.all_rows if str(row.get("track_id", "")) in id_set]
+        ok, target = _run_export_dialog(self, self.facade, track_rows, playlist_name="全部歌曲")
         if not ok:
             return
-        if fmt == "__plan__":
-            track_rows = list(tracks or [])
-            if not track_rows:
-                id_set = set(track_ids)
-                track_rows = [row for row in self.all_rows if str(row.get("track_id", "")) in id_set]
-            dlg = ExportPlanDialog(self, track_rows)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
-                return
-            self.facade.export_with_plan(track_ids, out_dir, dlg.export_plan(), bitrate="320k")
-        else:
-            self.facade.export(track_ids, out_dir, fmt=fmt, bitrate="320k")
-        self.grid.set_status(f"已导出 {len(track_ids)} 条到 {out_dir}")
+        self.grid.set_status(f"已导出 {len(track_ids)} 条到 {target}")
 
     def on_export(self) -> None:
         tracks = self.grid.selected_tracks()
@@ -315,7 +305,7 @@ class TracksPage(QWidget):
             self._add_track_ids_to_playlist(track_ids, add_map[chosen])
             return
         if chosen == action_add_new:
-            playlist_id = _choose_or_create_playlist(self, self.facade, self.btn_add_playlist, allow_create=True)
+            playlist_id = _prompt_new_playlist(self, self.facade)
             if playlist_id:
                 self._add_track_ids_to_playlist(track_ids, playlist_id)
             return
@@ -351,9 +341,11 @@ class PlaylistPage(QWidget):
         self.btn_add = QPushButton("新建歌单")
         self.btn_del = QPushButton("删除歌单")
         self.btn_clear = QPushButton("清空歌单")
+        self.btn_export_playlist = QPushButton("导出选中歌单")
         top.addWidget(self.btn_add)
         top.addWidget(self.btn_del)
         top.addWidget(self.btn_clear)
+        top.addWidget(self.btn_export_playlist)
         top.addStretch(1)
 
         splitter = QSplitter()
@@ -404,6 +396,7 @@ class PlaylistPage(QWidget):
         self.btn_add.clicked.connect(self.add_playlist)
         self.btn_del.clicked.connect(self.delete_playlist)
         self.btn_clear.clicked.connect(self.clear_playlist)
+        self.btn_export_playlist.clicked.connect(self.export_current_playlist)
         self.btn_remove_tracks.clicked.connect(self.remove_selected_tracks)
         self.btn_copy_playlist.clicked.connect(self.copy_selected_tracks)
         self.btn_move_playlist.clicked.connect(self.move_selected_tracks)
@@ -422,6 +415,7 @@ class PlaylistPage(QWidget):
             self.btn_add,
             self.btn_del,
             self.btn_clear,
+            self.btn_export_playlist,
             self.btn_remove_tracks,
             self.btn_copy_playlist,
             self.btn_move_playlist,
@@ -576,20 +570,28 @@ class PlaylistPage(QWidget):
         track_ids = [str(t.get("track_id", "")) for t in tracks if t.get("track_id")]
         if not track_ids:
             return
-        out_dir = QFileDialog.getExistingDirectory(self, "选择导出目录")
-        if not out_dir:
-            return
-        fmt, ok = _ask_export_format(self, self.btn_export)
+        ok, target = _run_export_dialog(self, self.facade, tracks, playlist_name=self._current_playlist_name())
         if not ok:
             return
-        if fmt == "__plan__":
-            dlg = ExportPlanDialog(self, tracks)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
-                return
-            self.facade.export_with_plan(track_ids, out_dir, dlg.export_plan(), bitrate="320k")
-        else:
-            self.facade.export(track_ids, out_dir, fmt=fmt, bitrate="320k")
-        self.grid.set_status(f"已导出 {len(track_ids)} 条到 {out_dir}")
+        self.grid.set_status(f"已导出 {len(track_ids)} 条到 {target}")
+
+    def _current_playlist_name(self) -> str:
+        item = self.tree.currentItem()
+        if item is None:
+            return "playlist"
+        return str(item.text(0) or "playlist")
+
+    def export_current_playlist(self) -> None:
+        if not self.current_playlist_id:
+            return
+        tracks = list(self.current_rows)
+        if not tracks:
+            QMessageBox.information(self, "导出歌单", "当前歌单没有歌曲。")
+            return
+        ok, target = _run_export_dialog(self, self.facade, tracks, playlist_name=self._current_playlist_name())
+        if not ok:
+            return
+        self.grid.set_status(f"已导出歌单 {len(tracks)} 首到 {target}")
 
     def on_favorite(self) -> None:
         tracks = self.grid.selected_tracks()
@@ -721,13 +723,7 @@ class PlaylistPage(QWidget):
             mode, pid = action_map[chosen]
             target = pid
             if mode.endswith("_new"):
-                target = _choose_or_create_playlist(
-                    self,
-                    self.facade,
-                    self.btn_copy_playlist,
-                    exclude_ids={self.current_playlist_id},
-                    allow_create=True,
-                )
+                target = _prompt_new_playlist(self, self.facade)
             if not target:
                 return
             if mode in {"add", "add_new", "copy", "copy_new"}:
@@ -951,20 +947,10 @@ class FullScanPage(QWidget):
         track_ids = [str(t.get("track_id", "")) for t in tracks if t.get("track_id")]
         if not track_ids:
             return
-        out_dir = QFileDialog.getExistingDirectory(self, "选择导出目录")
-        if not out_dir:
-            return
-        fmt, ok = _ask_export_format(self, self.btn_export)
+        ok, target = _run_export_dialog(self, self.facade, tracks, playlist_name="全量筛选")
         if not ok:
             return
-        if fmt == "__plan__":
-            dlg = ExportPlanDialog(self, tracks)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
-                return
-            self.facade.export_with_plan(track_ids, out_dir, dlg.export_plan(), bitrate="320k")
-        else:
-            self.facade.export(track_ids, out_dir, fmt=fmt, bitrate="320k")
-        self.grid.set_status(f"已导出 {len(track_ids)} 条到 {out_dir}")
+        self.grid.set_status(f"已导出 {len(track_ids)} 条到 {target}")
 
     def on_delete(self) -> None:
         if not self.current_work_id:
@@ -1049,7 +1035,7 @@ class FullScanPage(QWidget):
             self.library_changed.emit()
             return
         if chosen == action_add_new:
-            target = _choose_or_create_playlist(self, self.facade, self.btn_add_playlist, allow_create=True)
+            target = _prompt_new_playlist(self, self.facade)
             if target:
                 count = self.facade.add_tracks_to_playlist(target, track_ids)
                 self.grid.set_status(f"已添加 {count} 条到歌单")
@@ -1082,87 +1068,156 @@ class TrashPage(QWidget):
         root = QVBoxLayout(self)
         row = QHBoxLayout()
         self.btn_restore = QPushButton("恢复选中")
-        self.btn_delete_file = QPushButton("删除歌曲文件")
+        self.btn_delete_file = QPushButton("删除文件（保留元数据）")
         self.btn_delete_file.setStyleSheet("background-color:#b3261e;color:white;")
         row.addWidget(self.btn_restore)
         row.addWidget(self.btn_delete_file)
         row.addStretch(1)
 
-        self.grid = TrackGridWidget(self.facade)
+        split = QSplitter(Qt.Orientation.Horizontal)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(QLabel("文件仍在（可恢复 / 可彻底删文件）"))
+        self.left_model = DictTableModel(
+            [
+                ColumnDef("item_type_label", "类型"),
+                ColumnDef("file_name", "文件名"),
+                ColumnDef("title", "标题"),
+                ColumnDef("artist", "艺术家"),
+                ColumnDef("deleted_at", "删除时间"),
+                ColumnDef("item_id", "ID"),
+            ]
+        )
+        self.left_table = QTableView()
+        self.left_table.setModel(self.left_model)
+        self.left_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.left_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.left_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.left_table.setAlternatingRowColors(True)
+        self.left_table.setSortingEnabled(True)
+        self.left_table.horizontalHeader().setStretchLastSection(True)
+        _install_copy_support(self.left_table)
+        self.left_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.left_table.customContextMenuRequested.connect(lambda pos: self._show_context_menu(self.left_table, pos))
+        left_layout.addWidget(self.left_table, 1)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(QLabel("仅元数据（文件已删）"))
+        self.right_model = DictTableModel(
+            [
+                ColumnDef("item_type_label", "类型"),
+                ColumnDef("file_name", "文件名"),
+                ColumnDef("title", "标题"),
+                ColumnDef("artist", "艺术家"),
+                ColumnDef("deleted_at", "删除时间"),
+                ColumnDef("item_id", "ID"),
+            ]
+        )
+        self.right_table = QTableView()
+        self.right_table.setModel(self.right_model)
+        self.right_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.right_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.right_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.right_table.setAlternatingRowColors(True)
+        self.right_table.setSortingEnabled(True)
+        self.right_table.horizontalHeader().setStretchLastSection(True)
+        _install_copy_support(self.right_table)
+        self.right_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.right_table.customContextMenuRequested.connect(lambda pos: self._show_context_menu(self.right_table, pos))
+        right_layout.addWidget(self.right_table, 1)
+
+        split.addWidget(left)
+        split.addWidget(right)
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 1)
 
         root.addLayout(row)
-        root.addWidget(self.grid, 1)
+        root.addWidget(split, 1)
+        self.status = QLabel("-")
+        root.addWidget(self.status)
 
         self.btn_restore.clicked.connect(self.restore_selected)
         self.btn_delete_file.clicked.connect(self.delete_selected_files)
-        self.grid.track_field_edited.connect(self.on_track_field_edited)
-        self.grid.context_menu_requested.connect(self._show_context_menu)
 
         self.reload_trash()
 
     def apply_button_scale(self, scale: float) -> None:
         _apply_button_scale(self.btn_restore, scale)
         _apply_button_scale(self.btn_delete_file, scale)
-        self.grid.set_button_scale(scale)
 
     def set_facade(self, facade: MuseArcFacade) -> None:
         self.facade = facade
-        self.grid.set_facade(facade)
         self.reload_trash()
 
     def refresh_page(self) -> None:
         self.reload_trash()
 
     def reload_trash(self) -> None:
-        rows = self.facade.list_deleted_tracks(limit=2_000_000)
-        self.grid.set_tracks(rows)
-        self.grid.set_status(f"回收站 {len(rows)} 条")
+        rows = self.facade.list_deleted_items(limit=2_000_000)
+        left_rows = [r for r in rows if bool(r.get("file_exists"))]
+        right_rows = [r for r in rows if not bool(r.get("file_exists"))]
+        self.left_model.set_rows(left_rows)
+        self.right_model.set_rows(right_rows)
+        self.status.setText(f"回收站 共 {len(rows)} 条 | 文件仍在 {len(left_rows)} | 仅元数据 {len(right_rows)}")
+
+    def _selected_rows_from(self, table: QTableView, model: DictTableModel) -> list[dict]:
+        sm = table.selectionModel()
+        if sm is None:
+            return []
+        rows: list[dict] = []
+        for idx in sm.selectedRows():
+            row = model.row_at(idx.row())
+            if row:
+                rows.append(row)
+        return rows
+
+    def _selected_items(self) -> list[dict]:
+        picked: dict[tuple[str, str], dict] = {}
+        for row in self._selected_rows_from(self.left_table, self.left_model) + self._selected_rows_from(self.right_table, self.right_model):
+            key = (str(row.get("item_type", "")), str(row.get("item_id", "")))
+            if key[0] and key[1]:
+                picked[key] = row
+        return list(picked.values())
 
     def restore_selected(self) -> None:
-        track_ids = self.grid.selected_track_ids()
-        if not track_ids:
+        items = [r for r in self._selected_items() if bool(r.get("file_exists"))]
+        if not items:
+            QMessageBox.information(self, "恢复", "仅“文件仍在”列表中的项目可恢复。")
             return
-        restored = self.facade.restore_tracks(track_ids)
+        restored = self.facade.restore_deleted_items(items)
         self.reload_trash()
-        self.grid.set_status(f"已恢复 {restored} 条")
+        self.status.setText(f"已恢复 歌曲 {restored.get('tracks',0)} 条，歌词 {restored.get('lyrics',0)} 条")
         self.library_changed.emit()
 
     def delete_selected_files(self) -> None:
-        track_ids = self.grid.selected_track_ids()
-        if not track_ids:
+        items = self._selected_items()
+        if not items:
             return
-        answer = QMessageBox.question(self, "删除歌曲文件", f"仅删除 {len(track_ids)} 条对应文件（保留元数据）？")
+        answer = QMessageBox.question(self, "删除文件", f"仅删除 {len(items)} 条对应文件（保留元数据）？")
         if answer != QMessageBox.StandardButton.Yes:
             return
-        removed = self.facade.purge_deleted_track_files(track_ids)
-        self.grid.set_status(f"已删除文件 {removed} 个（元数据保留）")
+        removed = self.facade.purge_deleted_item_files(items)
+        self.status.setText(f"已删除文件 歌曲 {removed.get('tracks',0)} 个，歌词 {removed.get('lyrics',0)} 个（元数据保留）")
         self.reload_trash()
 
-    def on_track_field_edited(self, track_id: str, key: str, value) -> None:
-        if not track_id or key == "custom_order":
+    def _show_context_menu(self, table: QTableView, pos) -> None:
+        model = self.left_model if table is self.left_table else self.right_model
+        rows = self._selected_rows_from(table, model)
+        if not rows:
             return
-        try:
-            if key.startswith("tag:"):
-                tag_name = key.split(":", 1)[1]
-                self.facade.update_track_tag_values([track_id], tag_name, str(value))
-            else:
-                self.facade.update_tracks_fields([track_id], {key: value})
-        except Exception as exc:
-            QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
-            QTimer.singleShot(0, self.reload_trash)
-            return
-
-    def _show_context_menu(self, pos, tracks: list[dict]) -> None:
-        track_ids = [str(t.get("track_id", "")) for t in tracks if t.get("track_id")]
-        if not track_ids:
-            return
+        first = rows[0]
         menu = QMenu(self)
         action_restore = menu.addAction("恢复")
-        action_delete_file = menu.addAction("删除歌曲文件")
+        action_delete_file = menu.addAction("删除文件（保留元数据）")
         action_reveal = menu.addAction("使用文件管理器查看")
         action_copy = menu.addAction("复制行数据")
         action_detail = menu.addAction("查看详情")
-        chosen = menu.exec(pos)
+        global_pos = table.viewport().mapToGlobal(pos)
+        chosen = menu.exec(global_pos)
         if not chosen:
             return
         if chosen == action_restore:
@@ -1172,14 +1227,25 @@ class TrashPage(QWidget):
             self.delete_selected_files()
             return
         if chosen == action_reveal:
-            first = tracks[0] if tracks else {}
-            _reveal_in_file_manager(self, _storage_path_for_track_row(self.facade, first))
+            rel = str(first.get("storage_relpath", "") or "").strip()
+            path_text = str(Path(self.facade.library_root) / rel) if rel else ""
+            _reveal_in_file_manager(self, path_text)
             return
         if chosen == action_copy:
-            _copy_selected_cells(self.grid.table)
+            _copy_selected_cells(table)
             return
         if chosen == action_detail:
-            _show_track_details(self, tracks[0])
+            lines = [
+                f"类型: {first.get('item_type_label','')}",
+                f"ID: {first.get('item_id','')}",
+                f"文件名: {first.get('file_name','')}",
+                f"标题: {first.get('title','')}",
+                f"艺术家: {first.get('artist','')}",
+                f"专辑: {first.get('album','')}",
+                f"Storage: {first.get('storage_relpath','')}",
+                f"Deleted At: {first.get('deleted_at','')}",
+            ]
+            QMessageBox.information(self, "回收站详情", "\n".join(lines))
 
 
 class TagManagementPage(QWidget):
@@ -1196,8 +1262,10 @@ class TagManagementPage(QWidget):
         row = QHBoxLayout()
         self.btn_add = QPushButton("新增标签")
         self.btn_delete = QPushButton("删除标签")
+        self.btn_tools = QPushButton("小工具")
         row.addWidget(self.btn_add)
         row.addWidget(self.btn_delete)
+        row.addWidget(self.btn_tools)
         row.addStretch(1)
 
         splitter = QSplitter()
@@ -1241,6 +1309,7 @@ class TagManagementPage(QWidget):
 
         self.btn_add.clicked.connect(self._on_add)
         self.btn_delete.clicked.connect(self._on_delete)
+        self.btn_tools.clicked.connect(self._open_tools_menu)
         self.btn_remove_from_tag.clicked.connect(self._remove_selected_from_tag)
         self.btn_export.clicked.connect(self._on_export)
         self.btn_favorite.clicked.connect(self._on_favorite)
@@ -1255,6 +1324,7 @@ class TagManagementPage(QWidget):
     def apply_button_scale(self, scale: float) -> None:
         _apply_button_scale(self.btn_add, scale)
         _apply_button_scale(self.btn_delete, scale)
+        _apply_button_scale(self.btn_tools, scale)
         _apply_button_scale(self.btn_remove_from_tag, scale)
         _apply_button_scale(self.btn_export, scale)
         _apply_button_scale(self.btn_favorite, scale)
@@ -1370,20 +1440,36 @@ class TagManagementPage(QWidget):
         track_ids = [str(t.get("track_id", "")) for t in tracks if t.get("track_id")]
         if not track_ids:
             return
-        out_dir = QFileDialog.getExistingDirectory(self, "选择导出目录")
-        if not out_dir:
-            return
-        fmt, ok = _ask_export_format(self, self.btn_export)
+        ok, target = _run_export_dialog(self, self.facade, tracks, playlist_name=f"标签_{self.current_tag_name or 'tracks'}")
         if not ok:
             return
-        if fmt == "__plan__":
-            dlg = ExportPlanDialog(self, tracks)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
+        self.grid.set_status(f"已导出 {len(track_ids)} 条到 {target}")
+
+    def _open_tools_menu(self) -> None:
+        menu = QMenu(self)
+        action_love = menu.addAction("计算喜爱程度")
+        action_sync_preference = menu.addAction("喜好同步")
+        chosen = menu.exec(self.btn_tools.mapToGlobal(self.btn_tools.rect().bottomLeft()))
+        if chosen == action_love:
+            count = self.facade.recompute_love_score_tag()
+            self.grid.set_status(f"已更新 {count} 首的喜爱程度")
+            self.reload_tags()
+            self._reload_tracks_for_current_tag()
+            self.library_changed.emit()
+            return
+        if chosen == action_sync_preference:
+            answer = QMessageBox.question(
+                self,
+                "喜好同步",
+                "将标签【喜爱程度】同步到【喜好(1-10)】（除以10并四舍五入）？",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
                 return
-            self.facade.export_with_plan(track_ids, out_dir, dlg.export_plan(), bitrate="320k")
-        else:
-            self.facade.export(track_ids, out_dir, fmt=fmt, bitrate="320k")
-        self.grid.set_status(f"已导出 {len(track_ids)} 条到 {out_dir}")
+            count = self.facade.sync_preference_from_love_tag()
+            self.grid.set_status(f"已同步 {count} 首的喜好")
+            self._reload_tracks_for_current_tag()
+            self.library_changed.emit()
+            return
 
     def _on_favorite(self) -> None:
         tracks = self._selected_tracks()
@@ -1489,7 +1575,7 @@ class TagManagementPage(QWidget):
             self.library_changed.emit()
             return
         if chosen == action_add_new:
-            target = _choose_or_create_playlist(self, self.facade, self.btn_export, allow_create=True)
+            target = _prompt_new_playlist(self, self.facade)
             if target:
                 count = self.facade.add_tracks_to_playlist(target, track_ids)
                 self.grid.set_status(f"已添加 {count} 条到歌单")
@@ -1882,13 +1968,11 @@ class LyricsManagementPage(QWidget):
             return
         key = self._column_key_at(index)
         if key == "mapped_track":
+            if self.chk_multi.isChecked():
+                return
             mods = QApplication.keyboardModifiers()
             if bool(mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)):
                 return
-            if self.chk_multi.isChecked() and self.table.selectionModel() is not None:
-                selected_count = len(self.table.selectionModel().selectedRows())
-                if selected_count > 1:
-                    return
             self._map_single_row_by_index(index)
             return
         if self.chk_edit_mode.isChecked() and key in {"file_name", "lyrics_title", "lyrics_artist", "lyrics_album", "lyrics_author"}:
@@ -1944,7 +2028,7 @@ class LyricsManagementPage(QWidget):
 
     def _on_toggle_multi(self, checked: bool) -> None:
         mode = (
-            QAbstractItemView.SelectionMode.ExtendedSelection
+            QAbstractItemView.SelectionMode.MultiSelection
             if checked
             else QAbstractItemView.SelectionMode.SingleSelection
         )

@@ -1199,10 +1199,22 @@ class ReviewPage(QWidget):
         payload = dict(row or {})
         if not payload:
             return
-        row_key = str(payload.get("lyrics_id", "") or payload.get("lyrics_source", "") or "")
+        row_key = "|".join(
+            [
+                str(payload.get("review_id", "") or ""),
+                str(payload.get("lyrics_source", "") or ""),
+                str(payload.get("lyrics_id", "") or ""),
+            ]
+        ).strip("|")
         if self._preview_rows:
             prev = self._preview_rows[-1]
-            prev_key = str(prev.get("lyrics_id", "") or prev.get("lyrics_source", "") or "")
+            prev_key = "|".join(
+                [
+                    str(prev.get("review_id", "") or ""),
+                    str(prev.get("lyrics_source", "") or ""),
+                    str(prev.get("lyrics_id", "") or ""),
+                ]
+            ).strip("|")
             if row_key and row_key == prev_key:
                 return
         self._preview_rows.append(payload)
@@ -1478,10 +1490,22 @@ class ReviewPage(QWidget):
         if row.get("_link_row"):
             self._map_lyrics_row(row)
             return
-        row_key = str(row.get("lyrics_id", "") or row.get("lyrics_source", "") or "")
+        row_key = "|".join(
+            [
+                str(row.get("review_id", "") or ""),
+                str(row.get("lyrics_source", "") or ""),
+                str(row.get("lyrics_id", "") or ""),
+            ]
+        ).strip("|")
         if self._preview_rows:
             prev = self._preview_rows[-1]
-            prev_key = str(prev.get("lyrics_id", "") or prev.get("lyrics_source", "") or "")
+            prev_key = "|".join(
+                [
+                    str(prev.get("review_id", "") or ""),
+                    str(prev.get("lyrics_source", "") or ""),
+                    str(prev.get("lyrics_id", "") or ""),
+                ]
+            ).strip("|")
             if row_key and row_key == prev_key:
                 return
         self._preview_rows.append(dict(row))
