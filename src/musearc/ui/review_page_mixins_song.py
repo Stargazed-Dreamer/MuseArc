@@ -56,6 +56,30 @@ def _track_label(track: dict) -> str:
     return f"{track.get('artist', '')} - {track.get('title', '')} ({track.get('track_id', '')})"
 
 
+def _looks_like_hash_filename(name: str) -> bool:
+    text = Path(str(name or "")).stem.casefold()
+    if text.startswith("trk_") and len(text) >= 12:
+        return True
+    return False
+
+
+def _format_rank(value: str | None) -> int:
+    text = str(value or "").strip().lower().replace(".", "")
+    rank = {
+        "flac": 90,
+        "wav": 85,
+        "ape": 80,
+        "alac": 76,
+        "m4a": 70,
+        "aac": 68,
+        "opus": 66,
+        "ogg": 62,
+        "wma": 56,
+        "mp3": 50,
+    }
+    return rank.get(text, 40)
+
+
 class _ClickableFrame(QFrame):
     clicked = Signal()
 
@@ -172,6 +196,22 @@ class ReviewPageSongMixin:
                     paths.append(text)
         return paths
 
+    @staticmethod
+    def _open_in_file_manager(path_text: str) -> None:
+        target_text = str(path_text or "").strip()
+        if not target_text:
+            return
+        try:
+            target = Path(target_text)
+            if target.exists() and target.is_file():
+                subprocess.Popen(["explorer", "/select,", str(target)])
+            elif target.exists():
+                subprocess.Popen(["explorer", str(target)])
+            elif target.parent.exists():
+                subprocess.Popen(["explorer", str(target.parent)])
+        except Exception:
+            return
+
     def _fill_song_tree(self, rows: list[dict]) -> None:
         """\u6784\u5efa\u6b4c\u66f2\u5ba1\u67e5\u5206\u7ec4\u754c\u9762\uff08\u6bcf\u7ec4\u72ec\u7acb frame\uff09\u3002"""
         self._song_group_controls.clear()
@@ -191,6 +231,7 @@ class ReviewPageSongMixin:
         for group_key in sorted(groups.keys(), key=lambda s: s.casefold()):
             group_rows = self._aggregate_song_group_rows(list(groups[group_key]))
             group_queue_paths = self._song_group_queue_paths(group_rows)
+            seen_candidate_keys: set[tuple[str, str]] = set()
             frame = QFrame()
             frame.setFrameShape(QFrame.Shape.StyledPanel)
             frame.setStyleSheet("QFrame{background:#f8fbff;border:1px solid #d7e4f4;border-radius:8px;}")
@@ -212,6 +253,7 @@ class ReviewPageSongMixin:
             for text, stretch, fixed in [
                 ("保留", 0, 44),
                 ("播放", 0, 44),
+                ("位置", 0, 44),
                 ("文件名", 3, 0),
                 ("来源", 0, 84),
                 ("相对相似度", 0, 96),
@@ -232,7 +274,7 @@ class ReviewPageSongMixin:
 
             max_dur = 300
             for row in group_rows:
-                row_ctrl = self._build_song_row_widget(row, slider, group_queue_paths)
+                row_ctrl = self._build_song_row_widget(row, slider, group_queue_paths, seen_candidate_keys)
                 row_controls.append(row_ctrl)
                 host.addWidget(row_ctrl["container"])
                 max_dur = max(max_dur, _safe_int(row.get("candidate_duration_sec", 0), 0))
@@ -280,7 +322,13 @@ class ReviewPageSongMixin:
             self._apply_song_preset_same_for_group(controls)
         self.song_groups_layout.addStretch(1)
 
-    def _build_song_row_widget(self, row: dict, slider: QSlider, group_queue_paths: list[str]) -> dict:
+    def _build_song_row_widget(
+        self,
+        row: dict,
+        slider: QSlider,
+        group_queue_paths: list[str],
+        seen_candidate_keys: set[tuple[str, str]],
+    ) -> dict:
         """\u6784\u5efa\u6b4c\u66f2\u5ba1\u67e5\u884c\u63a7\u4ef6\uff0c\u542b\u52fe\u9009\u3001\u64ad\u653e\u3001\u5143\u6570\u636e\u7f16\u8f91\u533a\u3002"""
         payload = dict(row)
         candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
@@ -322,10 +370,15 @@ class ReviewPageSongMixin:
         btn_play = QPushButton("▶")
         btn_play.setFixedWidth(34)
         btn_play.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_reveal = QPushButton("📁")
+        btn_reveal.setFixedWidth(34)
+        btn_reveal.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        lbl_file_name = _ClickableLabel(str(payload.get("source_file", "") or ""))
+        source_path = str(payload.get("source_path", "") or "").strip()
+        source_file = str(payload.get("source_file", "") or "").strip() or Path(source_path).name
+        lbl_file_name = _ClickableLabel(source_file)
         lbl_file_name.setMinimumWidth(260)
-        lbl_file_name.setToolTip(str(payload.get("source_path", "") or ""))
+        lbl_file_name.setToolTip(source_path)
 
         lbl_source_kind = QLabel("待导入")
         lbl_source_kind.setFixedWidth(84)
@@ -341,6 +394,7 @@ class ReviewPageSongMixin:
 
         row_layout.addWidget(checkbox)
         row_layout.addWidget(btn_play)
+        row_layout.addWidget(btn_reveal)
         row_layout.addWidget(lbl_file_name, 3)
         row_layout.addWidget(lbl_source_kind)
         row_layout.addWidget(lbl_score)
@@ -363,7 +417,15 @@ class ReviewPageSongMixin:
                 queue_paths=list(group_queue_paths),
             )
         )
+        btn_reveal.clicked.connect(lambda _=False, p=source_path: self._open_in_file_manager(p))
         for candidate in candidates:
+            candidate_track_id = str(candidate.get("candidate_track_id", "") or "").strip()
+            candidate_path = str(candidate.get("candidate_path", "") or "").strip()
+            candidate_key = (candidate_track_id, "") if candidate_track_id else ("", candidate_path)
+            if candidate_key in seen_candidate_keys:
+                continue
+            if candidate_track_id or candidate_path:
+                seen_candidate_keys.add(candidate_key)
             candidate_row = _ClickableFrame()
             candidate_row.setFrameShape(QFrame.Shape.NoFrame)
             candidate_row.setStyleSheet("QFrame{background:transparent;border:none;}")
@@ -377,10 +439,15 @@ class ReviewPageSongMixin:
             btn_play_candidate = QPushButton("▶")
             btn_play_candidate.setFixedWidth(34)
             btn_play_candidate.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_reveal_candidate = QPushButton("📁")
+            btn_reveal_candidate.setFixedWidth(34)
+            btn_reveal_candidate.setCursor(Qt.CursorShape.PointingHandCursor)
 
             candidate_file = str(candidate.get("candidate_file_name", "") or "").strip()
             candidate_track = str(candidate.get("candidate_track", "") or "").strip()
-            candidate_text = candidate_file or candidate_track or "（无候选）"
+            if not candidate_file and candidate_path:
+                candidate_file = Path(candidate_path).name
+            candidate_text = candidate_track if _looks_like_hash_filename(candidate_file) else (candidate_file or candidate_track or "（无候选）")
             lbl_candidate_name = _ClickableLabel(candidate_text)
             lbl_candidate_name.setMinimumWidth(260)
             candidate_tip = str(candidate.get("candidate_path", "") or "")
@@ -400,6 +467,7 @@ class ReviewPageSongMixin:
 
             candidate_layout.addWidget(candidate_checkbox)
             candidate_layout.addWidget(btn_play_candidate)
+            candidate_layout.addWidget(btn_reveal_candidate)
             candidate_layout.addWidget(lbl_candidate_name, 3)
             candidate_layout.addWidget(lbl_candidate_source)
             candidate_layout.addWidget(lbl_candidate_score)
@@ -409,6 +477,27 @@ class ReviewPageSongMixin:
                 {
                     "checkbox": candidate_checkbox,
                     "track_id": str(candidate.get("candidate_track_id", "") or ""),
+                    "quality_score": _safe_float(
+                        (
+                            candidate.get("candidate_meta", {}).get("quality_score")
+                            if isinstance(candidate.get("candidate_meta"), dict)
+                            else candidate.get("quality_score", 0)
+                        ),
+                        0.0,
+                    ),
+                    "format_rank": _format_rank(
+                        (
+                            candidate.get("candidate_meta", {}).get("storage_format")
+                            if isinstance(candidate.get("candidate_meta"), dict)
+                            else ""
+                        )
+                        or (
+                            candidate.get("candidate_meta", {}).get("source_ext")
+                            if isinstance(candidate.get("candidate_meta"), dict)
+                            else ""
+                        )
+                        or Path(str(candidate.get("candidate_file_name", "") or "")).suffix
+                    ),
                 }
             )
 
@@ -418,6 +507,9 @@ class ReviewPageSongMixin:
                     s.value(),
                     queue_paths=list(group_queue_paths),
                 )
+            )
+            btn_reveal_candidate.clicked.connect(
+                lambda _=False, p=str(candidate.get("candidate_path", "")).strip(): self._open_in_file_manager(p)
             )
         return row_ctrl
 
@@ -646,29 +738,49 @@ class ReviewPageSongMixin:
 
     def _apply_song_preset_same_for_group(self, group: dict) -> None:
         """\u5e94\u7528“\u8fd9\u662f\u76f8\u540c\u6b4c\u66f2”\u9884\u8bbe\uff1a\u9ed8\u8ba4\u4ec5\u4fdd\u7559\u8d28\u91cf\u6700\u4f73\u9879\u3002"""
-        best_row: dict | None = None
-        best_score = float("-inf")
-        all_rows: list[dict] = []
+        best_source: dict | None = None
+        best_source_key: tuple[int, int] = (-1, -1)
+        best_candidate: tuple[dict, dict] | None = None
+        best_candidate_key: tuple[int, int] = (-1, -1)
         rows = group.get("rows") if isinstance(group, dict) else []
         for row_ctrl in rows if isinstance(rows, list) else []:
             row = row_ctrl.get("row") if isinstance(row_ctrl, dict) else {}
             if not isinstance(row, dict):
                 continue
-            score = _safe_float(row.get("score", 0), 0.0)
-            all_rows.append(row_ctrl)
-            if score > best_score:
-                best_score = score
-                best_row = row_ctrl
-        keep = {id(best_row)} if best_row is not None else set()
-        for row_ctrl in all_rows:
+            source_ext = Path(str(row.get("source_file", "") or row.get("source_path", "") or "")).suffix
+            source_rank = _format_rank(source_ext)
+            source_quality = int(round(_safe_float(row.get("source_quality_score", 0.0), 0.0) * 1000.0))
+            source_key = (source_rank, source_quality)
+            if source_key > best_source_key:
+                best_source_key = source_key
+                best_source = row_ctrl
+            candidate_controls = row_ctrl.get("candidate_controls") if isinstance(row_ctrl, dict) else []
+            for candidate in candidate_controls if isinstance(candidate_controls, list) else []:
+                if not isinstance(candidate, dict):
+                    continue
+                cand_rank = _safe_int(candidate.get("format_rank", 0), 0)
+                cand_quality = int(round(_safe_float(candidate.get("quality_score", 0.0), 0.0) * 1000.0))
+                cand_key = (cand_rank, cand_quality)
+                if cand_key > best_candidate_key:
+                    best_candidate_key = cand_key
+                    best_candidate = (row_ctrl, candidate)
+        choose_candidate = best_candidate is not None and best_candidate_key > best_source_key
+        for row_ctrl in rows if isinstance(rows, list) else []:
             checkbox = row_ctrl.get("checkbox") if isinstance(row_ctrl, dict) else None
             if isinstance(checkbox, QCheckBox):
-                checkbox.setChecked(id(row_ctrl) in keep)
+                checkbox.setChecked(bool(not choose_candidate and best_source is row_ctrl))
             candidate_controls = row_ctrl.get("candidate_controls") if isinstance(row_ctrl, dict) else []
             for candidate in candidate_controls if isinstance(candidate_controls, list) else []:
                 candidate_checkbox = candidate.get("checkbox") if isinstance(candidate, dict) else None
                 if isinstance(candidate_checkbox, QCheckBox):
-                    candidate_checkbox.setChecked(False)
+                    candidate_checkbox.setChecked(
+                        bool(
+                            choose_candidate
+                            and best_candidate
+                            and best_candidate[0] is row_ctrl
+                            and best_candidate[1] is candidate
+                        )
+                    )
 
     def _invert_song_group(self, group: dict) -> None:
         """\u5bf9\u5f53\u524d\u6b4c\u66f2\u5ba1\u67e5\u7ec4\u6267\u884c\u53cd\u9009\u3002"""

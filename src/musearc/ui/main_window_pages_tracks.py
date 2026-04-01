@@ -17,12 +17,30 @@ from musearc.ui.main_window_helpers import (
     _storage_path_for_track_row,
 )
 from musearc.ui.main_window_pages_common import _queue_play_tracks
+from musearc.ui.long_task import make_chunked_task, run_modal_task
 
 
 # ?????
 # 1) TracksPage ??????????????
 # 2) PlaylistPage ????? + ????????
 # 3) ???? TrackGridWidget?????????????????
+
+
+def _run_chunked_ids_modal(
+    parent: QWidget,
+    *,
+    title: str,
+    message: str,
+    ids: list[str],
+    step,
+    chunk_size: int = 512,
+) -> tuple[dict, bool]:
+    task = make_chunked_task(ids, chunk_size=chunk_size, message=message, step=step)
+    outcome = run_modal_task(parent, title, task)
+    if outcome.error is not None:
+        raise outcome.error
+    result = outcome.result if isinstance(outcome.result, dict) else {"processed": 0, "affected": 0, "cancelled": outcome.cancelled}
+    return result, bool(outcome.cancelled)
 
 class TracksPage(QWidget):
     library_changed = Signal()
@@ -162,8 +180,20 @@ class TracksPage(QWidget):
         mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids))
         if mode == "cancel":
             return
-        count = self.facade.delete_tracks(track_ids, mode=mode)
-        self.grid.set_status(f"已移到回收站 {count} 条")
+        try:
+            result, cancelled = _run_chunked_ids_modal(
+                self,
+                title="移到回收站",
+                message="正在移到回收站",
+                ids=track_ids,
+                step=lambda chunk: self.facade.delete_tracks(chunk, mode=mode),
+                chunk_size=256,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "操作失败", f"移到回收站失败\n{exc}")
+            return
+        count = int(result.get("affected", 0) or 0)
+        self.grid.set_status(f"已移到回收站 {count} 条" + ("（已取消）" if cancelled else ""))
         self.reload_tracks_from_db()
         self.library_changed.emit()
 
@@ -173,8 +203,20 @@ class TracksPage(QWidget):
     def _add_track_ids_to_playlist(self, track_ids: list[str], playlist_id: str) -> None:
         if not track_ids or not playlist_id:
             return
-        count = self.facade.add_tracks_to_playlist(playlist_id, track_ids)
-        self.grid.set_status(f"已添加 {count} 条到歌单")
+        try:
+            result, cancelled = _run_chunked_ids_modal(
+                self,
+                title="加到歌单",
+                message="正在写入歌单",
+                ids=track_ids,
+                step=lambda chunk: self.facade.add_tracks_to_playlist(playlist_id, chunk),
+                chunk_size=512,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "操作失败", f"加到歌单失败\n{exc}")
+            return
+        count = int(result.get("affected", 0) or 0)
+        self.grid.set_status(f"已添加 {count} 条到歌单" + ("（已取消）" if cancelled else ""))
         self.reload_tracks_from_db()
         self.library_changed.emit()
 
@@ -499,7 +541,19 @@ class PlaylistPage(QWidget):
         answer = QMessageBox.question(self, "清空歌单", "确定清空当前歌单吗？")
         if answer != QMessageBox.StandardButton.Yes:
             return
-        count = self.facade.clear_playlist(self.current_playlist_id)
+
+        def _task(progress, _is_cancelled):
+            progress(0, 1, "正在清空歌单")
+            count = self.facade.clear_playlist(self.current_playlist_id)
+            progress(1, 1, "正在清空歌单")
+            return {"count": int(count or 0)}
+
+        outcome = run_modal_task(self, "清空歌单", _task)
+        if outcome.error is not None:
+            QMessageBox.warning(self, "操作失败", f"清空歌单失败\n{outcome.error}")
+            return
+        payload = outcome.result if isinstance(outcome.result, dict) else {}
+        count = int(payload.get("count", 0) or 0)
         self.reload_playlist_tracks()
         self.reload_playlists()
         self.grid.set_status(f"已清空 {count} 首")
@@ -511,10 +565,22 @@ class PlaylistPage(QWidget):
         track_ids = self.selected_track_ids()
         if not track_ids:
             return
-        count = self.facade.remove_tracks_from_playlist(self.current_playlist_id, track_ids)
+        try:
+            result, cancelled = _run_chunked_ids_modal(
+                self,
+                title="从歌单移除",
+                message="正在从歌单移除",
+                ids=track_ids,
+                step=lambda chunk: self.facade.remove_tracks_from_playlist(self.current_playlist_id, chunk),
+                chunk_size=512,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "操作失败", f"从歌单移除失败\n{exc}")
+            return
+        count = int(result.get("affected", 0) or 0)
         self.reload_playlist_tracks()
         self.reload_playlists()
-        self.grid.set_status(f"已移除 {count} 首")
+        self.grid.set_status(f"已移除 {count} 首" + ("（已取消）" if cancelled else ""))
         self.library_changed.emit()
 
     def _choose_target_playlist(self, anchor: QWidget, *, allow_create: bool = True) -> str | None:
@@ -528,8 +594,20 @@ class PlaylistPage(QWidget):
         target = self._choose_target_playlist(self.btn_copy_playlist, allow_create=True)
         if not target:
             return
-        count = self.facade.add_tracks_to_playlist(target, track_ids)
-        self.grid.set_status(f"已复制 {count} 首")
+        try:
+            result, cancelled = _run_chunked_ids_modal(
+                self,
+                title="复制到歌单",
+                message="正在复制到歌单",
+                ids=track_ids,
+                step=lambda chunk: self.facade.add_tracks_to_playlist(target, chunk),
+                chunk_size=512,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "操作失败", f"复制到歌单失败\n{exc}")
+            return
+        count = int(result.get("affected", 0) or 0)
+        self.grid.set_status(f"已复制 {count} 首" + ("（已取消）" if cancelled else ""))
         self.reload_playlists()
         self.library_changed.emit()
 
@@ -542,11 +620,26 @@ class PlaylistPage(QWidget):
         target = self._choose_target_playlist(self.btn_move_playlist, allow_create=True)
         if not target:
             return
-        added = self.facade.add_tracks_to_playlist(target, track_ids)
-        self.facade.remove_tracks_from_playlist(self.current_playlist_id, track_ids)
+        def _move_step(chunk: list[str]) -> int:
+            added = int(self.facade.add_tracks_to_playlist(target, chunk) or 0)
+            self.facade.remove_tracks_from_playlist(self.current_playlist_id, chunk)
+            return added
+        try:
+            result, cancelled = _run_chunked_ids_modal(
+                self,
+                title="移动到歌单",
+                message="正在移动到歌单",
+                ids=track_ids,
+                step=_move_step,
+                chunk_size=512,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "操作失败", f"移动到歌单失败\n{exc}")
+            return
+        moved = int(result.get("affected", 0) or 0)
         self.reload_playlist_tracks()
         self.reload_playlists()
-        self.grid.set_status(f"已移动 {added} 首")
+        self.grid.set_status(f"已移动 {moved} 首" + ("（已取消）" if cancelled else ""))
         self.library_changed.emit()
 
     def on_export(self) -> None:
@@ -615,10 +708,22 @@ class PlaylistPage(QWidget):
         mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids))
         if mode == "cancel":
             return
-        deleted = self.facade.delete_tracks(track_ids, mode=mode)
+        try:
+            result, cancelled = _run_chunked_ids_modal(
+                self,
+                title="移到回收站",
+                message="正在移到回收站",
+                ids=track_ids,
+                step=lambda chunk: self.facade.delete_tracks(chunk, mode=mode),
+                chunk_size=256,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "操作失败", f"移到回收站失败\n{exc}")
+            return
+        deleted = int(result.get("affected", 0) or 0)
         self.reload_playlist_tracks()
         self.reload_playlists()
-        self.grid.set_status(f"已移到回收站 {deleted} 条")
+        self.grid.set_status(f"已移到回收站 {deleted} 条" + ("（已取消）" if cancelled else ""))
         self.library_changed.emit()
 
     def on_track_field_edited(self, track_id: str, key: str, value) -> None:
@@ -718,17 +823,44 @@ class PlaylistPage(QWidget):
             if not target:
                 return
             if mode in {"add", "add_new", "copy", "copy_new"}:
-                count = self.facade.add_tracks_to_playlist(target, track_ids)
-                self.grid.set_status(f"已添加 {count} 首")
+                try:
+                    result, cancelled = _run_chunked_ids_modal(
+                        self,
+                        title="加到歌单",
+                        message="正在写入歌单",
+                        ids=track_ids,
+                        step=lambda chunk: self.facade.add_tracks_to_playlist(target, chunk),
+                        chunk_size=512,
+                    )
+                except Exception as exc:
+                    QMessageBox.warning(self, "操作失败", f"加到歌单失败\n{exc}")
+                    return
+                count = int(result.get("affected", 0) or 0)
+                self.grid.set_status(f"已添加 {count} 首" + ("（已取消）" if cancelled else ""))
                 self.reload_playlists()
                 self.library_changed.emit()
                 return
             if mode in {"move", "move_new"}:
-                count = self.facade.add_tracks_to_playlist(target, track_ids)
-                self.facade.remove_tracks_from_playlist(self.current_playlist_id, track_ids)
+                def _move_step(chunk: list[str]) -> int:
+                    added = int(self.facade.add_tracks_to_playlist(target, chunk) or 0)
+                    self.facade.remove_tracks_from_playlist(self.current_playlist_id, chunk)
+                    return added
+                try:
+                    result, cancelled = _run_chunked_ids_modal(
+                        self,
+                        title="移动到歌单",
+                        message="正在移动到歌单",
+                        ids=track_ids,
+                        step=_move_step,
+                        chunk_size=512,
+                    )
+                except Exception as exc:
+                    QMessageBox.warning(self, "操作失败", f"移动到歌单失败\n{exc}")
+                    return
+                count = int(result.get("affected", 0) or 0)
                 self.reload_playlist_tracks()
                 self.reload_playlists()
-                self.grid.set_status(f"已移动 {count} 首")
+                self.grid.set_status(f"已移动 {count} 首" + ("（已取消）" if cancelled else ""))
                 self.library_changed.emit()
                 return
             return
@@ -750,3 +882,5 @@ class PlaylistPage(QWidget):
             return
         if chosen == action_detail:
             _show_track_details(self, tracks[0])
+
+

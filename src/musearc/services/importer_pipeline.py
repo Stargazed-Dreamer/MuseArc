@@ -9,6 +9,7 @@ from __future__ import annotations
 import difflib
 import html
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ from musearc.core.paths import ensure_parent, shard_relpath
 from musearc.core.text_normalize import lrc_visible_lines, normalize_text
 from musearc.infra.db.repositories import LibraryRepository
 from musearc.infra.media.commands import MediaCommandError
+from musearc.infra.media.prober import repair_metadata_text
 from musearc.services.import_runtime import ImportControl, ResumeState, delete_resume_state, load_resume_state, resume_state_path
 from musearc.services.lyrics_match import read_text_guess_encoding
 from musearc.services.scanner import scan_import_source
@@ -31,6 +33,7 @@ from musearc.services.importer import (
     _copy_file_and_sha256,
     _derive_title_artist,
     _extract_lyrics_meta,
+    _infer_lyrics_language_kind,
     _is_placeholder_empty_lyrics,
     _lyrics_group_display_name,
     _merge_ext_payload_for_duplicate,
@@ -54,6 +57,8 @@ def run_import_path(
     resume: bool = True,
 ) -> ImportReport:
     """\u6267\u884c\u5bfc\u5165\u4e3b\u6d41\u7a0b\uff08\u626b\u63cf\u3001\u53bb\u91cd\u3001\u5165\u5e93\u3001\u5339\u914d\u3001\u5ba1\u67e5\u3001\u65ad\u70b9\u6062\u590d\uff09\u3002"""
+    state_save_every_files = 25
+    state_save_every_seconds = 1.5
     source_path = source_path.resolve()
     state_file = resume_state_path(service.library_root, source_path)
     state = load_resume_state(state_file) if resume else None
@@ -122,15 +127,14 @@ def run_import_path(
     skipped_audio_registry_dirty = False
     seen_lyrics_registry_dirty = False
 
+    file_state_rows = [file_state_map[rel] for rel in all_relpaths if rel in file_state_map]
+    last_state_save_ts = time.monotonic()
+    last_saved_processed = int(state.processed_files or 0)
+    duplicate_candidates_cache: dict[tuple[int, int], list[dict]] = {}
+
     def snapshot_file_states() -> list[dict]:
         """\u5feb\u7167\u5f53\u524d\u6279\u6b21\u6bcf\u4e2a\u6587\u4ef6\u7684\u72b6\u6001\u3002"""
-        rows: list[dict] = []
-        for rel in all_relpaths:
-            state_row = file_state_map.get(rel)
-            if not state_row:
-                continue
-            rows.append(dict(state_row))
-        return rows
+        return [dict(row) for row in file_state_rows]
 
     def set_processing(relpath: str, step: str) -> None:
         """\u5c06\u6587\u4ef6\u72b6\u6001\u6807\u8bb0\u4e3a\u5904\u7406\u4e2d\u3002"""
@@ -204,6 +208,40 @@ def run_import_path(
             return
         service._save_seen_lyrics_path_keys(seen_lyrics_path_keys)
         seen_lyrics_registry_dirty = False
+
+    def maybe_checkpoint_state(*, force: bool = False) -> None:
+        """\u6309\u9891\u7387\u68c0\u67e5\u70b9\u4fdd\u5b58\u65ad\u70b9\u4e0e\u6279\u6b21\u8fdb\u5ea6\uff0c\u907f\u514d\u6bcf\u6587\u4ef6\u5168\u91cf\u843d\u76d8\u3002"""
+        nonlocal last_state_save_ts, last_saved_processed
+        now = time.monotonic()
+        processed = int(state.processed_files or 0)
+        should_save = force
+        if not should_save and processed > last_saved_processed:
+            file_delta = processed - last_saved_processed
+            time_delta = now - last_state_save_ts
+            should_save = file_delta >= state_save_every_files or time_delta >= state_save_every_seconds
+        if not should_save:
+            return
+        state.file_states = snapshot_file_states()
+        flush_skipped_audio_registry()
+        flush_seen_lyrics_registry()
+        service._save_state(state_file, repo, state)
+        # 提前提交当前事务，避免长时间写锁阻塞其它会话；后续写操作会自动开启新事务。
+        try:
+            repo.conn.commit()
+        except Exception:
+            pass
+        last_state_save_ts = now
+        last_saved_processed = processed
+
+    def get_duplicate_candidates(duration_sec: float, *, tolerance_sec: float = 6.0) -> list[dict]:
+        """\u7f13\u5b58\u76f8\u540c\u65f6\u957f\u7a97\u53e3\u7684\u53bb\u91cd\u5019\u9009\uff0c\u964d\u4f4e\u9891\u7e41 SQL \u67e5\u8be2\u5f00\u9500\u3002"""
+        key = (int(round(float(duration_sec) * 10.0)), int(round(float(tolerance_sec) * 10.0)))
+        cached = duplicate_candidates_cache.get(key)
+        if cached is not None:
+            return cached
+        rows = repo.find_duplicate_candidates(duration_sec, tolerance_sec=tolerance_sec)
+        duplicate_candidates_cache[key] = rows
+        return rows
 
     batch_track_records: list[dict] = []
     if state.created_track_ids:
@@ -290,16 +328,20 @@ def run_import_path(
         return group_key, _lyrics_group_display_name(relpath)
 
     last_emit_ts = 0.0
+    last_file_states_emit_ts = -9999.0
 
     def emit(stage: str, current_file: str = "", force: bool = False, paused: bool = False) -> None:
         """\u8282\u6d41\u63a8\u9001\u5bfc\u5165\u8fdb\u5ea6\u4e8b\u4ef6\u3002"""
-        nonlocal last_emit_ts
+        nonlocal last_emit_ts, last_file_states_emit_ts
         if not progress_callback:
             return
         now = time.monotonic()
         if not force and now - last_emit_ts < 0.2:
             return
         last_emit_ts = now
+        include_file_states = bool(force or paused or (now - last_file_states_emit_ts >= 5.0))
+        if include_file_states:
+            last_file_states_emit_ts = now
         progress_callback(
             ImportProgress(
                 import_batch_id=state.import_batch_id,
@@ -316,7 +358,7 @@ def run_import_path(
                 errors=len(state.errors),
                 resumed=resumed,
                 paused=paused,
-                file_states=snapshot_file_states(),
+                file_states=snapshot_file_states() if include_file_states else [],
             )
         )
 
@@ -327,95 +369,33 @@ def run_import_path(
         processed_relpaths.add(relpath)
         state.processed_relpaths.append(relpath)
         state.processed_files = len(processed_relpaths)
-        state.file_states = snapshot_file_states()
-        flush_skipped_audio_registry()
-        flush_seen_lyrics_registry()
-        service._save_state(state_file, repo, state)
+        maybe_checkpoint_state(force=False)
 
     state.file_states = snapshot_file_states()
     emit("start", force=True)
     with nullcontext():
-        for candidate in audio_files:
-            relpath = str(candidate.path.relative_to(source_path)).replace("\\", "/")
-            if relpath in processed_relpaths:
-                continue
-            source_path_key = _normalize_source_path_key(candidate.path)
-            if source_path_key in existing_source_path_keys:
-                state.duplicate_tracks += 1
-                set_skipped(relpath, "源路径重复（库内或已删除）", source_path=candidate.path)
-                mark_processed(relpath)
-                continue
-            if source_path_key in skipped_audio_path_keys:
-                state.duplicate_tracks += 1
-                set_skipped(relpath, "源路径命中历史跳过记录", source_path=candidate.path)
-                mark_processed(relpath)
-                continue
-            if source_path_key in pending_audio_path_keys:
-                state.duplicate_tracks += 1
-                set_skipped(relpath, "源路径已在待审查队列", source_path=candidate.path)
-                mark_processed(relpath)
-                continue
+        def on_pause_checkpoint() -> None:
+            maybe_checkpoint_state(force=True)
 
-            cancelled, mode = service._wait_control(control, emit, relpath)
-            if cancelled:
-                state.file_states = snapshot_file_states()
-                return service._handle_cancel(repo, state, state_file, start_time, rollback=(mode == "rollback"), emit=emit)
-
+        def process_audio_after_fingerprint(
+            candidate,
+            relpath: str,
+            source_path_key: str,
+            probe,
+            fp,
+            fp_error: MediaCommandError | None,
+        ) -> None:
             pending_review_reason: str | None = None
-
-            set_processing(relpath, "音频探测")
-            emit("audio_probe", relpath)
-            try:
-                probe = service.dependencies.probe.probe(candidate.path)
-            except MediaCommandError as exc:
-                state.errors.append(f"probe_failed:{candidate.path}:{exc}")
-                state.review_items += 1
-                service._enqueue_review(
-                    repo,
-                    ReviewItem(
-                        kind=ReviewKind.FILE_ISSUE,
-                        title="音频探测失败",
-                        payload={"path": str(candidate.path), "error": str(exc)},
-                        priority=3,
-                    ),
-                )
-                set_review(relpath, "音频探测失败")
-                mark_processed(relpath)
-                continue
-
-            if probe.duration_sec < service.runtime_cfg.thresholds.min_track_duration_sec:
-                state.review_items += 1
-                service._enqueue_review(
-                    repo,
-                    ReviewItem(
-                        kind=ReviewKind.FILE_ISSUE,
-                        title="疑似试听或哑文件",
-                        payload={"path": str(candidate.path), "duration_sec": probe.duration_sec},
-                        priority=2,
-                    ),
-                )
-                set_review(relpath, "疑似试听或哑文件")
-                mark_processed(relpath)
-                continue
-
-            set_processing(relpath, "指纹提取")
-            emit("audio_loudnorm", relpath)
-            emit("audio_fingerprint", relpath)
-            try:
-                fp = service._fingerprint_with_loudness_normalization(
-                    candidate.path,
-                    target_lufs=-14.0,
-                )
-            except MediaCommandError as exc:
-                err_text = str(exc).casefold()
+            if fp_error is not None:
+                err_text = str(fp_error).casefold()
                 issue_title = "指纹提取失败"
                 issue_reason = "指纹提取失败"
                 if "loudnorm" in err_text:
                     issue_title = "响度归一不可用"
                     issue_reason = "响度归一不可用"
-                state.errors.append(f"fingerprint_failed:{candidate.path}:{exc}")
+                state.errors.append(f"fingerprint_failed:{candidate.path}:{fp_error}")
                 state.review_items += 1
-                suggest_pool = repo.find_duplicate_candidates(probe.duration_sec, tolerance_sec=30.0)
+                suggest_pool = get_duplicate_candidates(probe.duration_sec, tolerance_sec=30.0)
                 suggestions = service._suggest_similar_tracks_by_name(candidate.path.stem, suggest_pool)
                 service._enqueue_review(
                     repo,
@@ -424,7 +404,7 @@ def run_import_path(
                         title=issue_title,
                         payload={
                             "path": str(candidate.path),
-                            "error": str(exc),
+                            "error": str(fp_error),
                             "title_hint": candidate.path.stem,
                             "suggest_candidates": suggestions,
                             "group_key": suggestions[0].get("track_id") if suggestions else "",
@@ -434,24 +414,38 @@ def run_import_path(
                 )
                 set_review(relpath, issue_reason)
                 mark_processed(relpath)
-                continue
+                return
 
-            title, artist = _derive_title_artist(candidate.path, probe.title, probe.artist)
-            quality = _quality_score(probe.duration_sec, probe.bit_rate, candidate.ext)
+            title, artist = _derive_title_artist(candidate.path, probe.title, probe.artist, probe.tags)
+            file_size = None
+            try:
+                file_size = int(candidate.path.stat().st_size)
+            except Exception:
+                file_size = None
+            quality = _quality_score(
+                probe.duration_sec,
+                probe.bit_rate,
+                candidate.ext,
+                probe.sample_rate,
+                file_size,
+            )
             fp_payload = service.dependencies.fingerprint.encode_vector(fp.vector)
             new_ext_payload = _build_track_ext_payload(probe)
             set_processing(relpath, "源去重")
 
-            dedupe_candidates = repo.find_duplicate_candidates(probe.duration_sec)
+            dedupe_candidates = get_duplicate_candidates(probe.duration_sec)
             decision = service.duplicate_evaluator.decide(
                 new_payload=fp_payload,
                 new_quality=quality,
                 new_title=title,
+                new_artist=artist,
+                new_duration_sec=probe.duration_sec,
                 new_source_ext=candidate.ext,
                 candidates=dedupe_candidates,
             )
 
             if decision.decision == DuplicateDecision.KEEP_EXISTING:
+                existing: dict = {}
                 if decision.existing_track_id:
                     existing_rows = repo.get_tracks_by_ids([decision.existing_track_id])
                     existing = existing_rows[0] if existing_rows else {}
@@ -463,7 +457,7 @@ def run_import_path(
                 state.duplicate_tracks += 1
                 set_skipped(relpath, "重复且保留已有", source_path=candidate.path)
                 mark_processed(relpath)
-                continue
+                return
 
             if decision.decision == DuplicateDecision.REVIEW:
                 state.review_items += 1
@@ -485,7 +479,7 @@ def run_import_path(
                 )
                 set_review(relpath, "疑似重复音频")
                 mark_processed(relpath)
-                continue
+                return
 
             track_id = new_id("trk")
             ext_no_dot = candidate.ext.lower().strip(".") or "bin"
@@ -513,7 +507,7 @@ def run_import_path(
                     storage_abs.unlink(missing_ok=True)
                 set_review(relpath, "复制归档失败")
                 mark_processed(relpath)
-                continue
+                return
 
             existing_by_sha = repo.get_track_by_source_sha(source_sha)
             if existing_by_sha:
@@ -540,16 +534,16 @@ def run_import_path(
                     set_review(relpath, "命中已删除歌曲，待确认是否重新导入")
                 else:
                     state.duplicate_tracks += 1
-                    set_skipped(relpath, "source_sha256重复", source_path=candidate.path)
+                    set_skipped(relpath, "source_sha256??", source_path=candidate.path)
                 mark_processed(relpath)
-                continue
+                return
 
             track_row = TrackInsert(
                 track_id=track_id,
                 file_name=candidate.path.name,
                 title=title,
                 artist=artist,
-                album=(probe.album or ""),
+                album=repair_metadata_text(probe.album or ""),
                 language_kind="unknown",
                 preference_level=5,
                 storage_format=ext_no_dot,
@@ -580,9 +574,9 @@ def run_import_path(
                     state.duplicate_tracks += 1
                     if storage_abs.exists():
                         storage_abs.unlink(missing_ok=True)
-                    set_skipped(relpath, "source_sha256重复", source_path=candidate.path)
+                    set_skipped(relpath, "source_sha256??", source_path=candidate.path)
                     mark_processed(relpath)
-                    continue
+                    return
                 state.errors.append(f"insert_failed:{candidate.path}:{exc}")
                 state.review_items += 1
                 service._enqueue_review(
@@ -598,16 +592,15 @@ def run_import_path(
                     storage_abs.unlink(missing_ok=True)
                 set_review(relpath, "写入数据库失败")
                 mark_processed(relpath)
-                continue
+                return
 
-            if decision.existing_track_id:
+            if decision.decision == DuplicateDecision.KEEP_NEW and decision.existing_track_id:
                 existing_rows = repo.get_tracks_by_ids([decision.existing_track_id])
                 existing = existing_rows[0] if existing_rows else {}
                 if existing:
                     merge_patch: dict[str, object] = {}
 
                     def _needs_fill(field_key: str, current: str) -> bool:
-                        """\u5224\u65ad\u5f53\u524d\u5b57\u6bb5\u662f\u5426\u9700\u8981\u7531\u65e7\u6570\u636e\u8865\u5168\u3002"""
                         text = str(current or "").strip().casefold()
                         if field_key == "title":
                             return text in {"", "unknown title", "unknown"}
@@ -621,7 +614,7 @@ def run_import_path(
                         merge_patch["title"] = str(existing.get("title", "")).strip()
                     if _needs_fill("artist", artist) and str(existing.get("artist", "")).strip():
                         merge_patch["artist"] = str(existing.get("artist", "")).strip()
-                    if _needs_fill("album", probe.album or "") and str(existing.get("album", "")).strip():
+                    if _needs_fill("album", repair_metadata_text(probe.album or "")) and str(existing.get("album", "")).strip():
                         merge_patch["album"] = str(existing.get("album", "")).strip()
                     if _needs_fill("language_kind", "unknown") and str(existing.get("language_kind", "")).strip():
                         merge_patch["language_kind"] = str(existing.get("language_kind", "")).strip()
@@ -638,6 +631,7 @@ def run_import_path(
                         track_row.ext_json = merged_new_ext
 
             state.imported_tracks += 1
+            duplicate_candidates_cache.clear()
             existing_source_path_keys.add(source_path_key)
             state.created_track_ids.append(track_id)
             state.created_storage_relpaths.append(storage_rel)
@@ -647,7 +641,7 @@ def run_import_path(
                     "track_id": track_id,
                     "title": title,
                     "artist": artist,
-                    "album": probe.album or "",
+                    "album": repair_metadata_text(probe.album or ""),
                     "source_stem": candidate.path.stem,
                     "storage_relpath": storage_rel,
                 }
@@ -699,6 +693,141 @@ def run_import_path(
                 set_archived(relpath)
             mark_processed(relpath)
 
+        def process_fingerprint_batch(batch: list[tuple], fp_executor: ThreadPoolExecutor | None) -> ImportReport | None:
+            if not batch:
+                return None
+
+            def _cancelled_report(relpath: str, mode: str) -> ImportReport:
+                maybe_checkpoint_state(force=True)
+                return service._handle_cancel(repo, state, state_file, start_time, rollback=(mode == "rollback"), emit=emit)
+
+            if fp_executor is not None and len(batch) > 1:
+                futures = [
+                    fp_executor.submit(
+                        service._fingerprint_with_loudness_normalization,
+                        candidate.path,
+                        -14.0,
+                    )
+                    for candidate, _relpath, _source_key, _probe in batch
+                ]
+                for (candidate, relpath, source_key, probe), future in zip(batch, futures):
+                    cancelled, mode = service._wait_control(control, emit, relpath, on_paused=on_pause_checkpoint)
+                    if cancelled:
+                        return _cancelled_report(relpath, mode)
+                    fp = None
+                    fp_error: MediaCommandError | None = None
+                    try:
+                        fp = future.result()
+                    except MediaCommandError as exc:
+                        fp_error = exc
+                    except Exception as exc:
+                        fp_error = MediaCommandError(f"fingerprint_failed:{candidate.path}:{exc}")
+                    process_audio_after_fingerprint(candidate, relpath, source_key, probe, fp, fp_error)
+                return None
+
+            for candidate, relpath, source_key, probe in batch:
+                cancelled, mode = service._wait_control(control, emit, relpath, on_paused=on_pause_checkpoint)
+                if cancelled:
+                    return _cancelled_report(relpath, mode)
+                fp = None
+                fp_error: MediaCommandError | None = None
+                try:
+                    fp = service._fingerprint_with_loudness_normalization(
+                        candidate.path,
+                        target_lufs=-14.0,
+                    )
+                except MediaCommandError as exc:
+                    fp_error = exc
+                except Exception as exc:
+                    fp_error = MediaCommandError(f"fingerprint_failed:{candidate.path}:{exc}")
+                process_audio_after_fingerprint(candidate, relpath, source_key, probe, fp, fp_error)
+            return None
+
+        fp_workers = max(1, int(getattr(service, "fingerprint_workers", 1) or 1))
+        fp_batch_size = max(1, min(12, fp_workers * 2))
+        fp_executor = ThreadPoolExecutor(max_workers=fp_workers, thread_name_prefix="fp-gen") if fp_workers > 1 else None
+
+        try:
+            fp_batch: list[tuple] = []
+            for candidate in audio_files:
+                relpath = str(candidate.path.relative_to(source_path)).replace("\\", "/")
+                if relpath in processed_relpaths:
+                    continue
+                source_path_key = _normalize_source_path_key(candidate.path)
+                if source_path_key in existing_source_path_keys:
+                    state.duplicate_tracks += 1
+                    set_skipped(relpath, "源路径重复（库内或已删除）", source_path=candidate.path)
+                    mark_processed(relpath)
+                    continue
+                if source_path_key in skipped_audio_path_keys:
+                    state.duplicate_tracks += 1
+                    set_skipped(relpath, "源路径命中历史跳过记录", source_path=candidate.path)
+                    mark_processed(relpath)
+                    continue
+                if source_path_key in pending_audio_path_keys:
+                    state.duplicate_tracks += 1
+                    set_skipped(relpath, "源路径已在待审查队列", source_path=candidate.path)
+                    mark_processed(relpath)
+                    continue
+
+                cancelled, mode = service._wait_control(control, emit, relpath, on_paused=on_pause_checkpoint)
+                if cancelled:
+                    maybe_checkpoint_state(force=True)
+                    return service._handle_cancel(repo, state, state_file, start_time, rollback=(mode == "rollback"), emit=emit)
+
+                set_processing(relpath, "音频探测")
+                emit("audio_probe", relpath)
+                try:
+                    probe = service.dependencies.probe.probe(candidate.path)
+                except MediaCommandError as exc:
+                    state.errors.append(f"probe_failed:{candidate.path}:{exc}")
+                    state.review_items += 1
+                    service._enqueue_review(
+                        repo,
+                        ReviewItem(
+                            kind=ReviewKind.FILE_ISSUE,
+                            title="音频探测失败",
+                            payload={"path": str(candidate.path), "error": str(exc)},
+                            priority=3,
+                        ),
+                    )
+                    set_review(relpath, "音频探测失败")
+                    mark_processed(relpath)
+                    continue
+
+                if probe.duration_sec < service.runtime_cfg.thresholds.min_track_duration_sec:
+                    state.review_items += 1
+                    service._enqueue_review(
+                        repo,
+                        ReviewItem(
+                            kind=ReviewKind.FILE_ISSUE,
+                            title="疑似试听或哑文件",
+                            payload={"path": str(candidate.path), "duration_sec": probe.duration_sec},
+                            priority=2,
+                        ),
+                    )
+                    set_review(relpath, "疑似试听或哑文件")
+                    mark_processed(relpath)
+                    continue
+
+                set_processing(relpath, "指纹提取")
+                emit("audio_loudnorm", relpath)
+                emit("audio_fingerprint", relpath)
+                fp_batch.append((candidate, relpath, source_path_key, probe))
+                if len(fp_batch) >= fp_batch_size:
+                    cancelled_report = process_fingerprint_batch(fp_batch, fp_executor)
+                    fp_batch = []
+                    if cancelled_report is not None:
+                        return cancelled_report
+
+            if fp_batch:
+                cancelled_report = process_fingerprint_batch(fp_batch, fp_executor)
+                if cancelled_report is not None:
+                    return cancelled_report
+        finally:
+            if fp_executor is not None:
+                fp_executor.shutdown(wait=True, cancel_futures=False)
+
     for candidate in lyrics_files:
         relpath = str(candidate.path.relative_to(source_path)).replace("\\", "/")
         if relpath in processed_relpaths:
@@ -716,9 +845,9 @@ def run_import_path(
             mark_processed(relpath)
             continue
 
-        cancelled, mode = service._wait_control(control, emit, relpath)
+        cancelled, mode = service._wait_control(control, emit, relpath, on_paused=on_pause_checkpoint)
         if cancelled:
-            state.file_states = snapshot_file_states()
+            maybe_checkpoint_state(force=True)
             return service._handle_cancel(repo, state, state_file, start_time, rollback=(mode == "rollback"), emit=emit)
 
         set_processing(relpath, "读取歌词")
@@ -756,6 +885,7 @@ def run_import_path(
 
         text_hash = sha1_text(text)
         lyrics_author, line_count, lyrics_title, lyrics_artist, lyrics_album = _extract_lyrics_meta(text)
+        lyrics_language_kind = _infer_lyrics_language_kind(text)
         existing_lyrics = repo.get_lyrics_by_text_hash(text_hash)
         if existing_lyrics and existing_lyrics.get("deleted_at"):
             state.review_items += 1
@@ -810,6 +940,7 @@ def run_import_path(
                         lyrics_author=lyrics_author,
                         line_count=line_count,
                         imported_at=_utc_now(),
+                        ext_json={"language_kind": lyrics_language_kind},
                     )
                 )
             except Exception as exc:
@@ -912,6 +1043,7 @@ def run_import_path(
         mark_processed(relpath)
 
     end_time = _utc_now()
+    maybe_checkpoint_state(force=True)
     state.file_states = snapshot_file_states()
     repo.finish_import_batch(
         state.import_batch_id,

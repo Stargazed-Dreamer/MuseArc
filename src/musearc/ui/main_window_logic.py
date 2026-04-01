@@ -13,9 +13,10 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor, QCloseEvent, QKeySequence
-from PySide6.QtWidgets import QFileDialog, QListWidgetItem, QMessageBox
+from PySide6.QtWidgets import QAbstractSpinBox, QFileDialog, QLineEdit, QListWidgetItem, QMessageBox, QPlainTextEdit, QTextEdit
 
 from musearc.app.facade import MuseArcFacade
+from musearc.ui.id3_update_window import Id3MetadataUpdateWindow
 from musearc.ui.lrclib_window import LrcLibFetchWindow
 from musearc.ui.main_window_components import _apply_button_scale, _history_action_label
 
@@ -49,6 +50,9 @@ class MainWindowLogicMixin:
         action_lrclib = QAction("补全歌词", self)
         action_lrclib.triggered.connect(self._open_lrclib_window)
         menu_more.addAction(action_lrclib)
+        action_id3_update = QAction("使用ID3和歌词更新歌曲元信息", self)
+        action_id3_update.triggered.connect(self._open_id3_update_window)
+        menu_more.addAction(action_id3_update)
 
     def _open_lrclib_window(self) -> None:
         window = LrcLibFetchWindow(self.facade)
@@ -59,9 +63,39 @@ class MainWindowLogicMixin:
             lambda *_args, w=window: self._tool_windows.remove(w) if w in self._tool_windows else None
         )
 
+    def _open_id3_update_window(self) -> None:
+        window = Id3MetadataUpdateWindow(self.facade)
+        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        window.show()
+        self._tool_windows.append(window)
+        window.destroyed.connect(
+            lambda *_args, w=window: self._tool_windows.remove(w) if w in self._tool_windows else None
+        )
+
     def _save_now(self) -> None:
         self.facade.save_now()
         self.statusBar().showMessage("已保存更改", 1800)
+
+    def _delete_selected_current_page(self) -> None:
+        focus = self.focusWidget()
+        if isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)):
+            if hasattr(focus, "isReadOnly") and not bool(focus.isReadOnly()):
+                return
+
+        page = self.stack.currentWidget()
+        if page is None:
+            return
+
+        for method_name in (
+            "on_delete",
+            "on_delete_from_library",
+            "_on_delete_from_library",
+            "_delete_selected_lyrics",
+        ):
+            fn = getattr(page, method_name, None)
+            if callable(fn):
+                fn()
+                return
 
     def _configure_autosave_timer(self) -> None:
         minutes = max(1, _safe_int(self.facade.get_runtime_config().ui.db_autosave_minutes, 5))
@@ -249,3 +283,4 @@ class MainWindowLogicMixin:
             except Exception:
                 pass
         super().closeEvent(event)
+

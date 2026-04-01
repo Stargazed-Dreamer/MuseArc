@@ -47,7 +47,7 @@ class ImportWorker(QObject):
                         "errors": p.errors,
                         "resumed": p.resumed,
                         "paused": p.paused,
-                        "file_states": list(p.file_states or []),
+                        "file_states": p.file_states if p.file_states else [],
                     }
                 )
 

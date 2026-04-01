@@ -10,6 +10,7 @@ from musearc.app.facade import MuseArcFacade
 from musearc.ui.table_models import ColumnDef
 from musearc.ui.track_grid import LyricsTableModel, _copy_selected_cells, _install_copy_support, _safe_int
 from musearc.ui.main_window_helpers import TrackPickerDialog, _apply_button_scale, _reveal_in_file_manager
+from musearc.ui.long_task import run_modal_task
 
 
 # ?????
@@ -366,11 +367,34 @@ class LyricsManagementPage(QWidget):
         answer = QMessageBox.question(self, "删除歌词", f"确定删除 {len(lyrics_ids)} 条歌词吗？")
         if answer != QMessageBox.StandardButton.Yes:
             return
-        deleted = self.facade.delete_lyrics(lyrics_ids)
+
+        total = len(lyrics_ids)
+
+        def _task(progress, is_cancelled):
+            deleted = 0
+            chunk_size = 256
+            processed = 0
+            for start in range(0, total, chunk_size):
+                if is_cancelled():
+                    break
+                chunk = lyrics_ids[start : start + chunk_size]
+                deleted += int(self.facade.delete_lyrics(chunk) or 0)
+                processed += len(chunk)
+                progress(processed, total, "正在删除歌词")
+            return {"deleted": deleted, "cancelled": bool(is_cancelled() and processed < total)}
+
+        outcome = run_modal_task(self, "删除歌词", _task)
+        if outcome.error is not None:
+            QMessageBox.warning(self, "删除歌词", f"删除失败\n{outcome.error}")
+            return
+        payload = outcome.result if isinstance(outcome.result, dict) else {}
+        deleted = int(payload.get("deleted", 0) or 0)
+        cancelled = bool(payload.get("cancelled"))
+
         self.reload_lyrics()
         self.preview.clear()
         self.library_changed.emit()
-        QMessageBox.information(self, "删除歌词", f"已删除 {deleted} 条歌词文件。")
+        QMessageBox.information(self, "删除歌词", f"已删除 {deleted} 条歌词" + ("（已取消）" if cancelled else ""))
 
     def _on_double_click_cell(self, index: QModelIndex) -> None:
         if not index.isValid():
@@ -463,14 +487,36 @@ class LyricsManagementPage(QWidget):
             return
         sm = self.table.selectionModel()
         selected = {idx.row() for idx in sm.selectedRows()}
+
+        def _compute_targets(progress, is_cancelled):
+            out: list[int] = []
+            step = max(1, total // 200)
+            for row in range(total):
+                if is_cancelled():
+                    return {"rows": out, "cancelled": True}
+                if row not in selected:
+                    out.append(row)
+                curr = row + 1
+                if curr == total or curr % step == 0:
+                    progress(curr, total, "正在计算反选")
+            return {"rows": out, "cancelled": False}
+
+        if total >= 10000:
+            outcome = run_modal_task(self, "反选", _compute_targets)
+            if outcome.error is not None:
+                QMessageBox.warning(self, "反选失败", f"反选失败\n{outcome.error}")
+                return
+            payload = outcome.result if isinstance(outcome.result, dict) else {}
+            rows = [int(v) for v in payload.get("rows", [])]
+            if bool(payload.get("cancelled")) and not rows:
+                return
+        else:
+            payload = _compute_targets(lambda *_args: None, lambda: False)
+            rows = [int(v) for v in payload.get("rows", [])]
+
         sm.clearSelection()
-        mode = (
-            QItemSelectionModel.SelectionFlag.Select
-            | QItemSelectionModel.SelectionFlag.Rows
-        )
-        for row in range(total):
-            if row in selected:
-                continue
+        mode = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+        for row in rows:
             idx = model.index(row, 0)
             sm.select(idx, mode)
 
@@ -516,3 +562,4 @@ class LyricsManagementPage(QWidget):
             return
         if chosen == action_copy:
             _copy_selected_cells(self.table)
+

@@ -141,6 +141,8 @@ class MainWindow(MainWindowLogicMixin, QMainWindow):
         self._build_menu()
         self._save_shortcut = QShortcut(QKeySequence.StandardKey.Save, self)
         self._save_shortcut.activated.connect(self._save_now)
+        self._delete_shortcut = QShortcut(QKeySequence("Delete"), self)
+        self._delete_shortcut.activated.connect(self._delete_selected_current_page)
         self._autosave_timer = QTimer(self)
         self._autosave_timer.timeout.connect(self._save_now)
         self._apply_button_scale_from_config()
@@ -186,12 +188,21 @@ class MainWindow(MainWindowLogicMixin, QMainWindow):
         cleaned: list[str] = []
         start_index = 0
         normalized_start = str(start_path or "").strip()
+        if normalized_start:
+            try:
+                normalized_start = str(Path(normalized_start).resolve())
+            except Exception:
+                normalized_start = str(start_path or "").strip()
         for raw in paths:
             text = str(raw or "").strip()
             if not text:
                 continue
-            cleaned.append(text)
-            if normalized_start and text == normalized_start:
+            try:
+                normalized_text = str(Path(text).resolve())
+            except Exception:
+                normalized_text = text
+            cleaned.append(normalized_text)
+            if normalized_start and normalized_text == normalized_start:
                 start_index = len(cleaned) - 1
         if not cleaned:
             QMessageBox.information(self, "播放", "未找到可播放文件。")

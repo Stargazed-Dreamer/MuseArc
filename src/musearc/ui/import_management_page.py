@@ -118,6 +118,7 @@ class ImportTaskDetailDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("导入任务详情")
         self.resize(1080, 760)
+        self._cached_rows: list[dict] = []
 
         root = QVBoxLayout(self)
 
@@ -228,9 +229,15 @@ class ImportTaskDetailDialog(QDialog):
                 ]
             )
         )
-        rows = self._normalize_file_states(list(payload.get("file_states", []) or []))
-        self.file_model.set_rows(rows)
-        self._apply_sort()
+        raw_states = payload.get("file_states", None)
+        if isinstance(raw_states, list) and raw_states:
+            rows = self._normalize_file_states(list(raw_states))
+            self._cached_rows = list(rows)
+            self.file_model.set_rows(rows)
+            self._apply_sort()
+        elif not running and self._cached_rows:
+            self.file_model.set_rows(list(self._cached_rows))
+            self._apply_sort()
 
 
 class ImportManagementPage(QWidget):
@@ -567,7 +574,14 @@ class ImportManagementPage(QWidget):
             return
 
     def _on_import_progress(self, payload: dict) -> None:
-        self._last_progress_payload = dict(payload)
+        merged_payload = dict(payload)
+        prev_payload = self._last_progress_payload or {}
+        raw_states = merged_payload.get("file_states", None)
+        if (not isinstance(raw_states, list) or not raw_states) and isinstance(prev_payload.get("file_states"), list):
+            prev_states = prev_payload.get("file_states") or []
+            if prev_states:
+                merged_payload["file_states"] = prev_states
+        self._last_progress_payload = merged_payload
         scanned = _safe_int(payload.get("scanned_files", 0), 0)
         processed = _safe_int(payload.get("processed_files", 0), 0)
         percent = 0 if scanned <= 0 else int((processed / scanned) * 100)

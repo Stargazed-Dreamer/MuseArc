@@ -1,6 +1,6 @@
 **/__pycache__/
 .venv
 test*
-reallib
+/*lib*/
+/*tmp*/
 *参考
-_library_test_*

@@ -192,6 +192,7 @@ class FacadeImportExportMixin:
         fmt: str,
         bitrate: str | None = None,
         sample_rate: int | None = None,
+        copy_bound_lyrics: bool = False,
     ) -> list[str]:
         """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1aexport\u3002"""
         out = Path(out_dir).expanduser().resolve()
@@ -205,6 +206,7 @@ class FacadeImportExportMixin:
                 fmt=fmt,
                 bitrate=bitrate,
                 sample_rate=sample_rate,
+                copy_bound_lyrics=copy_bound_lyrics,
             )
         self._log(f"export tracks={len(track_ids)} fmt={fmt} out={out}")
         return [str(p) for p in paths]
@@ -217,6 +219,7 @@ class FacadeImportExportMixin:
         *,
         bitrate: str | None = None,
         sample_rate: int | None = None,
+        copy_bound_lyrics: bool = False,
     ) -> list[str]:
         """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1aexport_with_plan\u3002"""
         out = Path(out_dir).expanduser().resolve()
@@ -230,6 +233,7 @@ class FacadeImportExportMixin:
                 format_plan=format_plan,
                 bitrate=bitrate,
                 sample_rate=sample_rate,
+                copy_bound_lyrics=copy_bound_lyrics,
             )
         self._log(f"export_with_plan tracks={len(track_ids)} out={out}")
         return [str(p) for p in paths]

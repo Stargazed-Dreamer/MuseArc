@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, Qt, QUrl
+from PySide6.QtCore import QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSlider, QWidget
 
@@ -157,6 +157,18 @@ class InlinePlayerBar(QWidget):
             return
         self.player.setSource(QUrl.fromLocalFile(str(target)))
         self.player.play()
+        if self._pending_seek_ms > 0:
+            QTimer.singleShot(120, self._apply_pending_seek_if_needed)
+
+    def _apply_pending_seek_if_needed(self) -> None:
+        if self._pending_seek_ms <= 0:
+            return
+        duration = int(self.player.duration() or 0)
+        if duration <= 0:
+            QTimer.singleShot(120, self._apply_pending_seek_if_needed)
+            return
+        self.player.setPosition(min(self._pending_seek_ms, duration))
+        self._pending_seek_ms = 0
 
     def _on_volume_changed(self, value: int) -> None:
         self.audio_output.setVolume(max(0.0, min(1.0, float(value) / 100.0)))

@@ -3,7 +3,28 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QHBoxLayout, QInputDialog, QLabel, QMenu, QMessageBox, QPushButton, QSplitter, QTableView, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget, QAbstractItemView, QComboBox
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QTableView,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+    QAbstractItemView,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QRadioButton,
+    QButtonGroup,
+    QLineEdit,
+)
 from PySide6.QtGui import QAction
 
 from musearc.app.facade import FAVORITES_PLAYLIST_ID, MuseArcFacade
@@ -20,12 +41,30 @@ from musearc.ui.main_window_helpers import (
     _storage_path_for_track_row,
 )
 from musearc.ui.main_window_pages_common import _queue_play_tracks
+from musearc.ui.long_task import make_chunked_task, run_modal_task
 
 
 # ?????
 # 1) FullScanPage???????????????????/???
 # 2) TrashPage???????????? / ??????
 # 3) TagManagementPage????? + ?????????????
+
+
+def _run_chunked_ids_modal(
+    parent: QWidget,
+    *,
+    title: str,
+    message: str,
+    ids: list[str],
+    step,
+    chunk_size: int = 512,
+) -> tuple[dict, bool]:
+    task = make_chunked_task(ids, chunk_size=chunk_size, message=message, step=step)
+    outcome = run_modal_task(parent, title, task)
+    if outcome.error is not None:
+        raise outcome.error
+    result = outcome.result if isinstance(outcome.result, dict) else {"processed": 0, "affected": 0, "cancelled": outcome.cancelled}
+    return result, bool(outcome.cancelled)
 
 class FullScanPage(QWidget):
     library_changed = Signal()
@@ -143,12 +182,159 @@ class FullScanPage(QWidget):
         rows = self.facade.get_fullscan_work_items(self.current_work_id, limit=2_000_000)
         self.grid.set_tracks(rows)
         self.grid.set_status(f"工作项目 {len(rows)} 条")
-
     def create_work(self) -> None:
-        name, ok = QInputDialog.getText(self, "新建全量筛选工作", "工作名称")
-        if not ok or not name.strip():
+        dialog = QDialog(self)
+        dialog.setWindowTitle("新建全量筛选工作")
+        layout = QVBoxLayout(dialog)
+
+        group = QButtonGroup(dialog)
+        opt_all = QRadioButton("全部歌曲")
+        opt_meta = QRadioButton("筛选名称高相似歌曲")
+        opt_fp = QRadioButton("按新阈值筛选相似歌曲")
+        opt_all.setChecked(True)
+        group.addButton(opt_all, 0)
+        group.addButton(opt_meta, 1)
+        group.addButton(opt_fp, 2)
+        layout.addWidget(opt_all)
+        layout.addWidget(opt_meta)
+        layout.addWidget(opt_fp)
+
+        row_name = QHBoxLayout()
+        row_name.addWidget(QLabel("工作名称"))
+        edit_name = QLineEdit("全量歌曲筛选")
+        edit_name.setPlaceholderText("请输入工作名称")
+        row_name.addWidget(edit_name, 1)
+        layout.addLayout(row_name)
+
+        row_threshold = QHBoxLayout()
+        row_threshold.addWidget(QLabel("相似度区间"))
+        spin_low = QDoubleSpinBox()
+        spin_low.setRange(0.0, 1.0)
+        spin_low.setSingleStep(0.01)
+        spin_low.setDecimals(3)
+        spin_low.setValue(0.88)
+        spin_high = QDoubleSpinBox()
+        spin_high.setRange(0.0, 1.0)
+        spin_high.setSingleStep(0.01)
+        spin_high.setDecimals(3)
+        spin_high.setValue(0.96)
+        row_threshold.addWidget(spin_low)
+        row_threshold.addWidget(QLabel("~"))
+        row_threshold.addWidget(spin_high)
+        row_threshold.addStretch(1)
+        layout.addLayout(row_threshold)
+
+        warn = QLabel("提示：区间过低会包含大量歌曲。")
+        warn.setStyleSheet("color:#b3261e;")
+        warn.hide()
+        layout.addWidget(warn)
+
+        default_name_map = {
+            0: "全量歌曲筛选",
+            1: "元数据高相似歌曲",
+            2: "指纹高相似歌曲",
+        }
+        name_touched = {"value": False}
+        last_default = {"value": "全量歌曲筛选"}
+
+        def _set_default_name() -> None:
+            selected_id = group.checkedId()
+            default_name = default_name_map.get(selected_id, "全量歌曲筛选")
+            current = edit_name.text().strip()
+            if (not name_touched["value"]) or current == last_default["value"]:
+                edit_name.setText(default_name)
+            last_default["value"] = default_name
+
+        def _on_name_changed(_text: str) -> None:
+            name_touched["value"] = True
+
+        edit_name.textChanged.connect(_on_name_changed)
+
+        def _refresh_ui() -> None:
+            is_fp = opt_fp.isChecked()
+            spin_low.setEnabled(is_fp)
+            spin_high.setEnabled(is_fp)
+            low = float(spin_low.value())
+            warn.setVisible(bool(is_fp and low < 0.60))
+            _set_default_name()
+
+        opt_all.toggled.connect(_refresh_ui)
+        opt_meta.toggled.connect(_refresh_ui)
+        opt_fp.toggled.connect(_refresh_ui)
+        spin_low.valueChanged.connect(lambda _v: _refresh_ui())
+        _refresh_ui()
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        layout.addWidget(buttons)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        _set_default_name()
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        work_id = self.facade.create_fullscan_work(name.strip())
+
+        selected = group.checkedId()
+        name = edit_name.text().strip() or default_name_map.get(selected, "全量歌曲筛选")
+        work_id = ""
+        if selected == 0:
+            def _task_all(progress, _is_cancelled):
+                progress(0, 1, "正在创建工作")
+                wid = self.facade.create_fullscan_work_all(name)
+                progress(1, 1, "正在创建工作")
+                return {"work_id": wid}
+            outcome = run_modal_task(self, "创建全量筛选工作", _task_all)
+            if outcome.error is not None:
+                QMessageBox.warning(self, "创建失败", f"创建工作失败\n{outcome.error}")
+                return
+            payload = outcome.result if isinstance(outcome.result, dict) else {}
+            work_id = str(payload.get("work_id", "") or "")
+        elif selected == 1:
+            def _task_meta(progress, is_cancelled):
+                wid = self.facade.create_fullscan_work_metadata_similar(
+                    name,
+                    progress_callback=progress,
+                    is_cancelled=is_cancelled,
+                )
+                return {"work_id": wid}
+            outcome = run_modal_task(self, "创建元数据高相似工作", _task_meta)
+            if outcome.error is not None:
+                QMessageBox.warning(self, "创建失败", f"创建工作失败\n{outcome.error}")
+                return
+            if outcome.cancelled:
+                self.grid.set_status("创建工作已取消")
+                return
+            payload = outcome.result if isinstance(outcome.result, dict) else {}
+            work_id = str(payload.get("work_id", "") or "")
+        else:
+            lower = float(spin_low.value())
+            upper = float(spin_high.value())
+            if min(lower, upper) < 0.60:
+                answer = QMessageBox.question(
+                    self,
+                    "阈值较低",
+                    "当前阈值可能包含大量歌曲，是否继续创建？",
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+            def _task_fp(progress, is_cancelled):
+                wid = self.facade.create_fullscan_work_fingerprint_similar(
+                    min_score=lower,
+                    max_score=upper,
+                    base_name=name,
+                    progress_callback=progress,
+                    is_cancelled=is_cancelled,
+                )
+                return {"work_id": wid}
+            outcome = run_modal_task(self, "创建指纹高相似工作", _task_fp)
+            if outcome.error is not None:
+                QMessageBox.warning(self, "创建失败", f"创建工作失败\n{outcome.error}")
+                return
+            if outcome.cancelled:
+                self.grid.set_status("创建工作已取消")
+                return
+            payload = outcome.result if isinstance(outcome.result, dict) else {}
+            work_id = str(payload.get("work_id", "") or "")
+        if not work_id:
+            return
         self.current_work_id = work_id
         self.reload_works()
         self.library_changed.emit()
@@ -173,9 +359,21 @@ class FullScanPage(QWidget):
         track_ids = self.selected_track_ids()
         if not track_ids:
             return
-        count = self.facade.remove_fullscan_items(self.current_work_id, track_ids)
+        try:
+            result, cancelled = _run_chunked_ids_modal(
+                self,
+                title="从工作移除",
+                message="正在从工作移除",
+                ids=track_ids,
+                step=lambda chunk: self.facade.remove_fullscan_items(self.current_work_id, chunk),
+                chunk_size=512,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "操作失败", f"从工作移除失败\n{exc}")
+            return
+        count = int(result.get("affected", 0) or 0)
         self.on_work_changed()
-        self.grid.set_status(f"已从工作移除 {count} 条")
+        self.grid.set_status(f"已从工作移除 {count} 条" + ("（已取消）" if cancelled else ""))
 
     def add_selected_to_playlist(self) -> None:
         track_ids = self.selected_track_ids()
@@ -184,8 +382,20 @@ class FullScanPage(QWidget):
         playlist_id = _choose_or_create_playlist(self, self.facade, self.btn_add_playlist)
         if not playlist_id:
             return
-        count = self.facade.add_tracks_to_playlist(playlist_id, track_ids)
-        self.grid.set_status(f"已添加 {count} 条到歌单")
+        try:
+            result, cancelled = _run_chunked_ids_modal(
+                self,
+                title="加到歌单",
+                message="正在写入歌单",
+                ids=track_ids,
+                step=lambda chunk: self.facade.add_tracks_to_playlist(playlist_id, chunk),
+                chunk_size=512,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "操作失败", f"加到歌单失败\n{exc}")
+            return
+        count = int(result.get("affected", 0) or 0)
+        self.grid.set_status(f"已添加 {count} 条到歌单" + ("（已取消）" if cancelled else ""))
         self.library_changed.emit()
 
     def on_favorite(self) -> None:
@@ -227,10 +437,25 @@ class FullScanPage(QWidget):
         mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids))
         if mode == "cancel":
             return
-        count = self.facade.delete_tracks(track_ids, mode=mode)
-        self.facade.remove_fullscan_items(self.current_work_id, track_ids)
+        def _step(chunk: list[str]) -> int:
+            deleted = int(self.facade.delete_tracks(chunk, mode=mode) or 0)
+            self.facade.remove_fullscan_items(self.current_work_id, chunk)
+            return deleted
+        try:
+            result, cancelled = _run_chunked_ids_modal(
+                self,
+                title="移到回收站",
+                message="正在移到回收站",
+                ids=track_ids,
+                step=_step,
+                chunk_size=256,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "操作失败", f"移到回收站失败\n{exc}")
+            return
+        count = int(result.get("affected", 0) or 0)
         self.on_work_changed()
-        self.grid.set_status(f"已移到回收站 {count} 条")
+        self.grid.set_status(f"已移到回收站 {count} 条" + ("（已取消）" if cancelled else ""))
         self.library_changed.emit()
 
     def on_track_field_edited(self, track_id: str, key: str, value) -> None:
@@ -296,15 +521,39 @@ class FullScanPage(QWidget):
             self.on_unfavorite()
             return
         if chosen in add_map:
-            count = self.facade.add_tracks_to_playlist(add_map[chosen], track_ids)
-            self.grid.set_status(f"已添加 {count} 条到歌单")
+            try:
+                result, cancelled = _run_chunked_ids_modal(
+                    self,
+                    title="加到歌单",
+                    message="正在写入歌单",
+                    ids=track_ids,
+                    step=lambda chunk: self.facade.add_tracks_to_playlist(add_map[chosen], chunk),
+                    chunk_size=512,
+                )
+            except Exception as exc:
+                QMessageBox.warning(self, "操作失败", f"加到歌单失败\n{exc}")
+                return
+            count = int(result.get("affected", 0) or 0)
+            self.grid.set_status(f"已添加 {count} 条到歌单" + ("（已取消）" if cancelled else ""))
             self.library_changed.emit()
             return
         if chosen == action_add_new:
             target = _prompt_new_playlist(self, self.facade)
             if target:
-                count = self.facade.add_tracks_to_playlist(target, track_ids)
-                self.grid.set_status(f"已添加 {count} 条到歌单")
+                try:
+                    result, cancelled = _run_chunked_ids_modal(
+                        self,
+                        title="加到歌单",
+                        message="正在写入歌单",
+                        ids=track_ids,
+                        step=lambda chunk: self.facade.add_tracks_to_playlist(target, chunk),
+                        chunk_size=512,
+                    )
+                except Exception as exc:
+                    QMessageBox.warning(self, "操作失败", f"加到歌单失败\n{exc}")
+                    return
+                count = int(result.get("affected", 0) or 0)
+                self.grid.set_status(f"已添加 {count} 条到歌单" + ("（已取消）" if cancelled else ""))
                 self.library_changed.emit()
             return
         if chosen == action_delete:
@@ -335,8 +584,11 @@ class TrashPage(QWidget):
         self.btn_restore = QPushButton("恢复选中")
         self.btn_delete_file = QPushButton("删除文件（保留元数据）")
         self.btn_delete_file.setStyleSheet("background-color:#b3261e;color:white;")
+        self.btn_delete_meta = QPushButton("删除元数据")
+        self.btn_delete_meta.setStyleSheet("background-color:#8b1e1e;color:white;")
         row.addWidget(self.btn_restore)
         row.addWidget(self.btn_delete_file)
+        row.addWidget(self.btn_delete_meta)
         row.addStretch(1)
 
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -407,12 +659,14 @@ class TrashPage(QWidget):
 
         self.btn_restore.clicked.connect(self.restore_selected)
         self.btn_delete_file.clicked.connect(self.delete_selected_files)
+        self.btn_delete_meta.clicked.connect(self.delete_selected_metadata)
 
         self.reload_trash()
 
     def apply_button_scale(self, scale: float) -> None:
         _apply_button_scale(self.btn_restore, scale)
         _apply_button_scale(self.btn_delete_file, scale)
+        _apply_button_scale(self.btn_delete_meta, scale)
 
     def set_facade(self, facade: MuseArcFacade) -> None:
         self.facade = facade
@@ -453,9 +707,32 @@ class TrashPage(QWidget):
         if not items:
             QMessageBox.information(self, "恢复", "仅“文件仍在”列表中的项目可恢复。")
             return
-        restored = self.facade.restore_deleted_items(items)
+        total = len(items)
+        def _task(progress, is_cancelled):
+            tracks = 0
+            lyrics = 0
+            chunk_size = 128
+            processed = 0
+            for start in range(0, total, chunk_size):
+                if is_cancelled():
+                    break
+                chunk = items[start : start + chunk_size]
+                part = self.facade.restore_deleted_items(chunk)
+                tracks += int(part.get("tracks", 0) or 0)
+                lyrics += int(part.get("lyrics", 0) or 0)
+                processed += len(chunk)
+                progress(processed, total, "正在恢复")
+            return {"tracks": tracks, "lyrics": lyrics, "cancelled": bool(is_cancelled() and processed < total)}
+        outcome = run_modal_task(self, "恢复项目", _task)
+        if outcome.error is not None:
+            QMessageBox.warning(self, "恢复失败", f"恢复失败\n{outcome.error}")
+            return
+        restored = outcome.result if isinstance(outcome.result, dict) else {"tracks": 0, "lyrics": 0}
         self.reload_trash()
-        self.status.setText(f"已恢复 歌曲 {restored.get('tracks',0)} 条，歌词 {restored.get('lyrics',0)} 条")
+        self.status.setText(
+            f"已恢复 歌曲 {restored.get('tracks',0)} 条，歌词 {restored.get('lyrics',0)} 条"
+            + ("（已取消）" if bool(restored.get("cancelled")) else "")
+        )
         self.library_changed.emit()
 
     def delete_selected_files(self) -> None:
@@ -465,9 +742,82 @@ class TrashPage(QWidget):
         answer = QMessageBox.question(self, "删除文件", f"仅删除 {len(items)} 条对应文件（保留元数据）？")
         if answer != QMessageBox.StandardButton.Yes:
             return
-        removed = self.facade.purge_deleted_item_files(items)
-        self.status.setText(f"已删除文件 歌曲 {removed.get('tracks',0)} 个，歌词 {removed.get('lyrics',0)} 个（元数据保留）")
+        total = len(items)
+        def _task(progress, is_cancelled):
+            tracks = 0
+            lyrics = 0
+            chunk_size = 128
+            processed = 0
+            for start in range(0, total, chunk_size):
+                if is_cancelled():
+                    break
+                chunk = items[start : start + chunk_size]
+                part = self.facade.purge_deleted_item_files(chunk)
+                tracks += int(part.get("tracks", 0) or 0)
+                lyrics += int(part.get("lyrics", 0) or 0)
+                processed += len(chunk)
+                progress(processed, total, "正在删除文件")
+            return {"tracks": tracks, "lyrics": lyrics, "cancelled": bool(is_cancelled() and processed < total)}
+        outcome = run_modal_task(self, "删除文件", _task)
+        if outcome.error is not None:
+            QMessageBox.warning(self, "删除失败", f"删除文件失败\n{outcome.error}")
+            return
+        removed = outcome.result if isinstance(outcome.result, dict) else {"tracks": 0, "lyrics": 0}
+        self.status.setText(
+            f"已删除文件 歌曲 {removed.get('tracks',0)} 个，歌词 {removed.get('lyrics',0)} 个（元数据保留）"
+            + ("（已取消）" if bool(removed.get("cancelled")) else "")
+        )
         self.reload_trash()
+
+    def delete_selected_metadata(self) -> None:
+        items = self._selected_items()
+        if not items:
+            return
+        answer1 = QMessageBox.warning(
+            self,
+            "删除元数据",
+            f"将永久删除 {len(items)} 条回收站元数据，是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer1 != QMessageBox.StandardButton.Yes:
+            return
+        answer2 = QMessageBox.warning(
+            self,
+            "再次确认",
+            "该操作不可撤销，确认永久删除元数据？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer2 != QMessageBox.StandardButton.Yes:
+            return
+        total = len(items)
+        def _task(progress, is_cancelled):
+            tracks = 0
+            lyrics = 0
+            chunk_size = 128
+            processed = 0
+            for start in range(0, total, chunk_size):
+                if is_cancelled():
+                    break
+                chunk = items[start : start + chunk_size]
+                part = self.facade.delete_deleted_items_metadata(chunk)
+                tracks += int(part.get("tracks", 0) or 0)
+                lyrics += int(part.get("lyrics", 0) or 0)
+                processed += len(chunk)
+                progress(processed, total, "正在删除元数据")
+            return {"tracks": tracks, "lyrics": lyrics, "cancelled": bool(is_cancelled() and processed < total)}
+        outcome = run_modal_task(self, "删除元数据", _task)
+        if outcome.error is not None:
+            QMessageBox.warning(self, "删除失败", f"删除元数据失败\n{outcome.error}")
+            return
+        removed = outcome.result if isinstance(outcome.result, dict) else {"tracks": 0, "lyrics": 0}
+        self.status.setText(
+            f"已删除元数据 歌曲 {removed.get('tracks',0)} 条，歌词 {removed.get('lyrics',0)} 条"
+            + ("（已取消）" if bool(removed.get("cancelled")) else "")
+        )
+        self.reload_trash()
+        self.library_changed.emit()
 
     def _show_context_menu(self, table: QTableView, pos) -> None:
         model = self.left_model if table is self.left_table else self.right_model
@@ -478,6 +828,7 @@ class TrashPage(QWidget):
         menu = QMenu(self)
         action_restore = menu.addAction("恢复")
         action_delete_file = menu.addAction("删除文件（保留元数据）")
+        action_delete_meta = menu.addAction("删除元数据")
         action_reveal = menu.addAction("使用文件管理器查看")
         action_copy = menu.addAction("复制行数据")
         action_detail = menu.addAction("查看详情")
@@ -490,6 +841,9 @@ class TrashPage(QWidget):
             return
         if chosen == action_delete_file:
             self.delete_selected_files()
+            return
+        if chosen == action_delete_meta:
+            self.delete_selected_metadata()
             return
         if chosen == action_reveal:
             rel = str(first.get("storage_relpath", "") or "").strip()
@@ -693,8 +1047,20 @@ class TagManagementPage(QWidget):
         track_ids = self._selected_track_ids()
         if not track_ids:
             return
-        count = self.facade.update_track_tag_values(track_ids, tag_name, "")
-        self.grid.set_status(f"已从标签“{tag_name}”移除 {count} 首")
+        try:
+            result, cancelled = _run_chunked_ids_modal(
+                self,
+                title="从标签移除",
+                message="正在清理标签",
+                ids=track_ids,
+                step=lambda chunk: self.facade.update_track_tag_values(chunk, tag_name, ""),
+                chunk_size=512,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "操作失败", f"从标签移除失败\n{exc}")
+            return
+        count = int(result.get("affected", 0) or 0)
+        self.grid.set_status(f"已从标签“{tag_name}”移除 {count} 首" + ("（已取消）" if cancelled else ""))
         self._reload_tracks_for_current_tag()
         self.reload_tags()
         self.library_changed.emit()
@@ -762,8 +1128,20 @@ class TagManagementPage(QWidget):
         mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids))
         if mode == "cancel":
             return
-        deleted = self.facade.delete_tracks(track_ids, mode=mode)
-        self.grid.set_status(f"已移到回收站 {deleted} 条")
+        try:
+            result, cancelled = _run_chunked_ids_modal(
+                self,
+                title="移到回收站",
+                message="正在移到回收站",
+                ids=track_ids,
+                step=lambda chunk: self.facade.delete_tracks(chunk, mode=mode),
+                chunk_size=256,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "操作失败", f"移到回收站失败\n{exc}")
+            return
+        deleted = int(result.get("affected", 0) or 0)
+        self.grid.set_status(f"已移到回收站 {deleted} 条" + ("（已取消）" if cancelled else ""))
         self._reload_tracks_for_current_tag()
         self.reload_tags()
         self.library_changed.emit()
@@ -834,15 +1212,39 @@ class TagManagementPage(QWidget):
             self._on_unfavorite()
             return
         if chosen in add_map:
-            count = self.facade.add_tracks_to_playlist(add_map[chosen], track_ids)
-            self.grid.set_status(f"已添加 {count} 条到歌单")
+            try:
+                result, cancelled = _run_chunked_ids_modal(
+                    self,
+                    title="加到歌单",
+                    message="正在写入歌单",
+                    ids=track_ids,
+                    step=lambda chunk: self.facade.add_tracks_to_playlist(add_map[chosen], chunk),
+                    chunk_size=512,
+                )
+            except Exception as exc:
+                QMessageBox.warning(self, "操作失败", f"加到歌单失败\n{exc}")
+                return
+            count = int(result.get("affected", 0) or 0)
+            self.grid.set_status(f"已添加 {count} 条到歌单" + ("（已取消）" if cancelled else ""))
             self.library_changed.emit()
             return
         if chosen == action_add_new:
             target = _prompt_new_playlist(self, self.facade)
             if target:
-                count = self.facade.add_tracks_to_playlist(target, track_ids)
-                self.grid.set_status(f"已添加 {count} 条到歌单")
+                try:
+                    result, cancelled = _run_chunked_ids_modal(
+                        self,
+                        title="加到歌单",
+                        message="正在写入歌单",
+                        ids=track_ids,
+                        step=lambda chunk: self.facade.add_tracks_to_playlist(target, chunk),
+                        chunk_size=512,
+                    )
+                except Exception as exc:
+                    QMessageBox.warning(self, "操作失败", f"加到歌单失败\n{exc}")
+                    return
+                count = int(result.get("affected", 0) or 0)
+                self.grid.set_status(f"已添加 {count} 条到歌单" + ("（已取消）" if cancelled else ""))
                 self.library_changed.emit()
             return
         if chosen == action_delete:
@@ -860,3 +1262,4 @@ class TagManagementPage(QWidget):
             return
         if chosen == action_detail:
             _show_track_details(self, tracks[0])
+

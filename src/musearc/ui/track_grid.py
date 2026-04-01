@@ -1,6 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from PySide6.QtCore import QItemSelectionModel, QModelIndex, Qt, QTimer, Signal
+from PySide6.QtCore import QItemSelection, QItemSelectionModel, QModelIndex, Qt, QTimer, Signal
 from PySide6.QtGui import QKeyEvent, QKeySequence, QMouseEvent, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -22,6 +22,7 @@ from musearc.ui.selection import SelectionController, SelectionMode
 from musearc.ui.table_models import ColumnDef, DictTableModel
 from musearc.ui.track_table_model import TrackTableModel
 from musearc.ui.main_window_helpers import _apply_button_scale
+from musearc.ui.long_task import run_modal_task
 
 
 def _copy_selected_cells(table: QTableView) -> None:
@@ -175,13 +176,23 @@ class TrackTableView(QTableView):
         self.blockSignals(True)
         self.selectionModel().clearSelection()
         if self.controller.mode == SelectionMode.NORMAL:
-            for row in sorted(self.controller.selected_rows):
-                if 0 <= row < self.row_count():
-                    index = self.model().index(row, 0)
-                    self.selectionModel().select(
-                        index,
-                        QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
-                    )
+            rows = sorted(r for r in self.controller.selected_rows if 0 <= r < self.row_count())
+            if rows:
+                selection = QItemSelection()
+                start = rows[0]
+                end = rows[0]
+                for row in rows[1:]:
+                    if row == end + 1:
+                        end = row
+                        continue
+                    selection.select(self.model().index(start, 0), self.model().index(end, 0))
+                    start = row
+                    end = row
+                selection.select(self.model().index(start, 0), self.model().index(end, 0))
+                self.selectionModel().select(
+                    selection,
+                    QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+                )
         if self.controller.focus_row is not None and 0 <= self.controller.focus_row < self.row_count():
             self.setCurrentIndex(self.model().index(self.controller.focus_row, 0))
         self.blockSignals(False)
@@ -295,14 +306,11 @@ class TrackTableView(QTableView):
             super().mouseDoubleClickEvent(event)
             return
 
-        self.doubleClicked.emit(idx)
         model = self.model()
         if model is None:
+            super().mouseDoubleClickEvent(event)
             return
         if hasattr(model, "is_group_row") and model.is_group_row(idx.row()):
-            return
-        if bool(model.flags(idx) & Qt.ItemFlag.ItemIsEditable):
-            self.edit(idx)
             return
         super().mouseDoubleClickEvent(event)
 
@@ -625,14 +633,43 @@ class TrackGridWidget(QWidget):
         self.table.set_edit_mode(bool(checked))
 
     def _on_invert_selection(self) -> None:
-        visible_track_rows: set[int] = set()
-        for idx, row_obj in enumerate(self.model.display_rows):
-            if row_obj.get("kind") == "track":
-                visible_track_rows.add(idx)
+        visible_track_rows: list[int] = [idx for idx, row_obj in enumerate(self.model.display_rows) if row_obj.get("kind") == "track"]
         if not visible_track_rows:
             return
-        current = {r for r in self.controller.selected_rows if r in visible_track_rows}
-        self.controller.selected_rows = visible_track_rows.difference(current)
+        visible_set = set(visible_track_rows)
+        current = {r for r in self.controller.selected_rows if r in visible_set}
+
+        target_rows: set[int]
+        if len(visible_track_rows) >= 20000:
+            snapshot_rows = list(visible_track_rows)
+            snapshot_current = set(current)
+
+            def _task(progress, is_cancelled):
+                total = max(1, len(snapshot_rows))
+                selected: list[int] = []
+                step = max(1, total // 200)
+                for idx, row in enumerate(snapshot_rows, 1):
+                    if is_cancelled():
+                        return {"rows": selected, "cancelled": True}
+                    if row not in snapshot_current:
+                        selected.append(row)
+                    if idx == total or (idx % step == 0):
+                        progress(idx, total, "正在计算反选")
+                return {"rows": selected, "cancelled": False}
+
+            outcome = run_modal_task(self, "反选", _task)
+            if outcome.error is not None:
+                QMessageBox.warning(self, "反选失败", f"反选失败\n{outcome.error}")
+                return
+            payload = outcome.result if isinstance(outcome.result, dict) else {}
+            if bool(payload.get("cancelled")) and not payload.get("rows"):
+                self.set_status("反选已取消")
+                return
+            target_rows = {int(v) for v in payload.get("rows", [])}
+        else:
+            target_rows = visible_set.difference(current)
+
+        self.controller.selected_rows = target_rows
         if self.controller.selected_rows:
             focus = min(self.controller.selected_rows)
             self.controller.focus_row = focus
@@ -688,8 +725,6 @@ class TrackGridWidget(QWidget):
             self.table.apply_controller_selection()
             self._refresh_status()
             return
-        if bool(self.model.flags(index) & Qt.ItemFlag.ItemIsEditable):
-            self.table.edit(index)
 
     def _on_ctrl_edit_requested(self, index: QModelIndex) -> None:
         if not index.isValid():

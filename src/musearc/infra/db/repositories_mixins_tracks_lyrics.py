@@ -8,6 +8,7 @@ from pathlib import Path
 from musearc.core.models import LyricsInsert, ReviewItem, TrackInsert
 from musearc.infra.db.repositories_common import (
     _placeholders,
+    _safe_json_loads,
     _utc_now_iso,
 )
 
@@ -270,7 +271,12 @@ class RepositoryTracksLyricsMixin:
             """,
             (key,),
         ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        item = dict(row)
+        payload = _safe_json_loads(str(item.get("ext_json", "") or ""))
+        item["lyrics_language"] = str(payload.get("language_kind") or payload.get("language") or "unknown")
+        return item
 
     def get_lyrics_by_ids(self, lyrics_ids: Iterable[str]) -> list[dict]:
         """\u4ed3\u50a8\u65b9\u6cd5\uff1aget_lyrics_by_ids\u3002"""
@@ -293,6 +299,8 @@ class RepositoryTracksLyricsMixin:
             item = dict(row)
             src = str(item.get("source_relpath", "") or "")
             item["file_name"] = src.replace("\\", "/").split("/")[-1] if src else ""
+            payload = _safe_json_loads(str(item.get("ext_json", "") or ""))
+            item["lyrics_language"] = str(payload.get("language_kind") or payload.get("language") or "unknown")
             out.append(item)
         return out
 
@@ -301,14 +309,15 @@ class RepositoryTracksLyricsMixin:
         existing = self.get_lyrics_id_by_hash(item.text_hash)
         if existing:
             return existing
+        ext_payload = item.ext_json if isinstance(item.ext_json, dict) else {}
         self.conn.execute(
             """
             INSERT INTO lyrics(
               lyrics_id, source_relpath, storage_relpath, text_hash, raw_encoding,
               lyrics_title, lyrics_artist, lyrics_album,
-              lyrics_author, line_count, imported_at, deleted_at
+              lyrics_author, line_count, imported_at, deleted_at, ext_json
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item.lyrics_id,
@@ -323,9 +332,33 @@ class RepositoryTracksLyricsMixin:
                 int(item.line_count),
                 item.imported_at.isoformat(),
                 None,
+                json.dumps(ext_payload, ensure_ascii=False),
             ),
         )
         return item.lyrics_id
+
+    def _lyrics_language_kind(self, lyrics_id: str) -> str:
+        row = self.conn.execute("SELECT ext_json FROM lyrics WHERE lyrics_id = ? LIMIT 1", (lyrics_id,)).fetchone()
+        if not row:
+            return ""
+        payload = _safe_json_loads(row[0] if row and len(row) > 0 else "")
+        value = str(payload.get("language_kind") or payload.get("language") or "").strip().casefold()
+        if value in {"", "unknown", "mixed"}:
+            return ""
+        return value
+
+    def _sync_track_language_from_lyrics_if_unknown(self, track_id: str, lyrics_id: str) -> None:
+        lang = self._lyrics_language_kind(lyrics_id)
+        if not lang:
+            return
+        row = self.conn.execute("SELECT language_kind FROM tracks WHERE track_id = ? LIMIT 1", (track_id,)).fetchone()
+        current = str(row[0] if row and len(row) > 0 else "").strip().casefold()
+        if current not in {"", "unknown"}:
+            return
+        self.conn.execute(
+            "UPDATE tracks SET language_kind = ?, updated_at = ? WHERE track_id = ?",
+            (lang, _utc_now_iso(), track_id),
+        )
 
     def delete_lyrics_by_ids(self, lyrics_ids: Iterable[str]) -> int:
         """\u4ed3\u50a8\u65b9\u6cd5\uff1adelete_lyrics_by_ids\u3002"""
@@ -346,6 +379,10 @@ class RepositoryTracksLyricsMixin:
         is_primary: bool = True,
     ) -> None:
         """\u4ed3\u50a8\u65b9\u6cd5\uff1alink_lyrics\u3002"""
+        if is_primary:
+            # 约束一对一主映射：同一首歌/同一条歌词在主映射维度都只保留一条。
+            self.conn.execute("UPDATE track_lyrics SET is_primary = 0 WHERE track_id = ?", (track_id,))
+            self.conn.execute("UPDATE track_lyrics SET is_primary = 0 WHERE lyrics_id = ?", (lyrics_id,))
         self.conn.execute(
             """
             INSERT INTO track_lyrics(track_id, lyrics_id, confidence, match_method, is_primary, created_at)
@@ -357,6 +394,7 @@ class RepositoryTracksLyricsMixin:
             """,
             (track_id, lyrics_id, confidence, match_method, 1 if is_primary else 0, _utc_now_iso()),
         )
+        self._sync_track_language_from_lyrics_if_unknown(track_id, lyrics_id)
 
     def primary_lyrics_for_track(self, track_id: str) -> dict | None:
         """\u4ed3\u50a8\u65b9\u6cd5\uff1aprimary_lyrics_for_track\u3002"""
@@ -396,7 +434,7 @@ class RepositoryTracksLyricsMixin:
             """
             SELECT l.lyrics_id, l.source_relpath, l.storage_relpath,
                    l.lyrics_title, l.lyrics_artist, l.lyrics_album,
-                   l.lyrics_author, l.line_count, l.imported_at, l.deleted_at,
+                   l.lyrics_author, l.line_count, l.imported_at, l.deleted_at, l.ext_json,
                    t.track_id, t.file_name AS mapped_track_file_name
             FROM lyrics l
             LEFT JOIN track_lyrics tl ON tl.lyrics_id = l.lyrics_id AND tl.is_primary = 1
@@ -412,6 +450,8 @@ class RepositoryTracksLyricsMixin:
             item = dict(row)
             src = str(item.get("source_relpath", "") or "")
             item["file_name"] = src.replace("\\", "/").split("/")[-1] if src else ""
+            payload = _safe_json_loads(str(item.get("ext_json", "") or ""))
+            item["lyrics_language"] = str(payload.get("language_kind") or payload.get("language") or "unknown")
             item["mapped_track"] = (
                 f"{item.get('mapped_track_file_name', '')} ({item.get('track_id', '')})"
                 if item.get("track_id") and item.get("mapped_track_file_name")
@@ -426,7 +466,7 @@ class RepositoryTracksLyricsMixin:
             """
             SELECT l.lyrics_id, l.source_relpath, l.storage_relpath,
                    l.lyrics_title, l.lyrics_artist, l.lyrics_album,
-                   l.lyrics_author, l.line_count, l.imported_at, l.deleted_at,
+                   l.lyrics_author, l.line_count, l.imported_at, l.deleted_at, l.ext_json,
                    t.track_id, t.file_name AS mapped_track_file_name
             FROM lyrics l
             LEFT JOIN track_lyrics tl ON tl.lyrics_id = l.lyrics_id AND tl.is_primary = 1
@@ -442,6 +482,8 @@ class RepositoryTracksLyricsMixin:
             item = dict(row)
             src = str(item.get("source_relpath", "") or "")
             item["file_name"] = src.replace("\\", "/").split("/")[-1] if src else ""
+            payload = _safe_json_loads(str(item.get("ext_json", "") or ""))
+            item["lyrics_language"] = str(payload.get("language_kind") or payload.get("language") or "unknown")
             item["mapped_track"] = (
                 f"{item.get('mapped_track_file_name', '')} ({item.get('track_id', '')})"
                 if item.get("track_id") and item.get("mapped_track_file_name")
@@ -468,6 +510,7 @@ class RepositoryTracksLyricsMixin:
             """,
             (track_id, lyrics_id, _utc_now_iso()),
         )
+        self._sync_track_language_from_lyrics_if_unknown(track_id, lyrics_id)
 
     def set_primary_track_for_lyrics(self, lyrics_id: str, track_id: str | None) -> None:
         """\u4ed3\u50a8\u65b9\u6cd5\uff1aset_primary_track_for_lyrics\u3002"""
@@ -487,6 +530,7 @@ class RepositoryTracksLyricsMixin:
             """,
             (track_id, lyrics_id, _utc_now_iso()),
         )
+        self._sync_track_language_from_lyrics_if_unknown(track_id, lyrics_id)
 
     def update_lyrics_author(self, lyrics_ids: Iterable[str], author: str) -> int:
         """\u4ed3\u50a8\u65b9\u6cd5\uff1aupdate_lyrics_author\u3002"""

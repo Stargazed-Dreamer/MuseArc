@@ -27,6 +27,7 @@ class ExportService:
         fmt: str,
         bitrate: str | None,
         sample_rate: int | None,
+        copy_bound_lyrics: bool = False,
     ) -> list[Path]:
         format_plan = {track_id: fmt for track_id in track_ids}
         return self.export_tracks_with_plan(
@@ -36,6 +37,7 @@ class ExportService:
             format_plan=format_plan,
             bitrate=bitrate,
             sample_rate=sample_rate,
+            copy_bound_lyrics=copy_bound_lyrics,
         )
 
     def export_tracks_with_plan(
@@ -47,6 +49,7 @@ class ExportService:
         format_plan: dict[str, str],
         bitrate: str | None,
         sample_rate: int | None,
+        copy_bound_lyrics: bool = False,
     ) -> list[Path]:
         records = repo.get_tracks_by_ids(track_ids)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -68,5 +71,13 @@ class ExportService:
                 options = ExportFormat(fmt=chosen_fmt, bitrate=bitrate, sample_rate=sample_rate)
                 self.transcoder.export_audio(source, target, options)
             exported.append(target)
+            if copy_bound_lyrics:
+                lyrics = repo.primary_lyrics_for_track(track_id) or {}
+                lyrics_rel = str(lyrics.get("storage_relpath", "") or "").strip()
+                if lyrics_rel:
+                    lyrics_source = self.library_root / lyrics_rel
+                    if lyrics_source.exists():
+                        lyric_target = target.with_suffix(".lrc")
+                        lyric_target.write_text(lyrics_source.read_text(encoding="utf-8"), encoding="utf-8")
 
         return exported

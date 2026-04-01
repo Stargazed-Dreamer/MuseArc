@@ -30,6 +30,12 @@ class UiConfig(BaseModel):
     delete_tracks_mode_default: str = "move_linked_lyrics"
     player_mode: str = "external"
     external_player_path: str = ""
+    fingerprint_workers: int = 0
+    duplicate_compare_workers: int = 0
+    duplicate_compare_parallel_threshold: int = 48
+    lyrics_match_workers: int = 0
+    lyrics_match_parallel_threshold: int = 96
+    general_worker_limit: int = 0
 
 
 class RuntimeConfig(BaseModel):

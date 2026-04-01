@@ -199,6 +199,7 @@ def _history_action_label(action_type: str) -> str:
         "update_lyrics_fields": "编辑歌词字段",
         "set_primary_lyrics_for_track": "修改歌曲歌词映射",
         "set_primary_track_for_lyrics": "修改歌词歌曲映射",
+        "merge_lyrics_for_review": "合并歌词审查项",
         "resolve_reviews": "处理审查项",
         "delete_lyrics": "删除歌词",
         "restore_lyrics": "恢复歌词",
@@ -427,10 +428,13 @@ class ExportConfigDialog(QDialog):
         mode_row = QHBoxLayout()
         self.chk_files = QCheckBox("导出为多个音频文件")
         self.chk_playlist = QCheckBox("导出为歌单清单(JSON)")
+        self.chk_export_lyrics = QCheckBox("同步导出绑定歌词（同名 .lrc）")
         self.chk_files.setChecked(True)
         self.chk_playlist.setChecked(True)
+        self.chk_export_lyrics.setChecked(True)
         mode_row.addWidget(self.chk_files)
         mode_row.addWidget(self.chk_playlist)
+        mode_row.addWidget(self.chk_export_lyrics)
         mode_row.addStretch(1)
 
         self.playlist_hint = QLabel("歌单清单将包含数据库路径、歌词路径、统计占位字段与歌单唯一哈希。")
@@ -507,6 +511,7 @@ class ExportConfigDialog(QDialog):
         files_mode = bool(self.chk_files.isChecked())
         playlist_mode = bool(self.chk_playlist.isChecked())
         self.tree.setVisible(files_mode)
+        self.chk_export_lyrics.setVisible(files_mode)
         self.playlist_hint.setVisible(playlist_mode)
         for btn in [
             self.btn_all_original,
@@ -541,6 +546,9 @@ class ExportConfigDialog(QDialog):
     def export_playlist_enabled(self) -> bool:
         return bool(self.chk_playlist.isChecked())
 
+    def export_lyrics_enabled(self) -> bool:
+        return bool(self.chk_export_lyrics.isChecked() and self.chk_files.isChecked())
+
     def export_plan(self) -> dict[str, str]:
         mapping = {
             "源格式": "original",
@@ -571,7 +579,13 @@ def _run_export_dialog(parent: QWidget, facade: MuseArcFacade, tracks: list[dict
         file_path = facade.export_playlist_package(track_ids, out_dir, playlist_name=playlist_name or "playlist")
         outputs.append(file_path)
     if dlg.export_files_enabled():
-        facade.export_with_plan(track_ids, out_dir, dlg.export_plan(), bitrate="320k")
+        facade.export_with_plan(
+            track_ids,
+            out_dir,
+            dlg.export_plan(),
+            bitrate="320k",
+            copy_bound_lyrics=dlg.export_lyrics_enabled(),
+        )
         outputs.append(out_dir)
     return True, " ; ".join(outputs) if outputs else out_dir
 

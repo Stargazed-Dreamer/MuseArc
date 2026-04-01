@@ -138,12 +138,19 @@ class _ClickableLabel(QLabel):
 
 
 class _TrackPickerDialog(QDialog):
-    def __init__(self, parent: QWidget, facade: MuseArcFacade):
+    def __init__(
+        self,
+        parent: QWidget,
+        facade: MuseArcFacade,
+        *,
+        initial_query: str = "",
+        lyrics_preview_text: str = "",
+    ):
         super().__init__(parent)
         self.facade = facade
         self.selected_track_id: str | None = None
         self.setWindowTitle("选择映射歌曲")
-        self.resize(920, 620)
+        self.resize(1100, 680)
 
         root = QVBoxLayout(self)
         top = QHBoxLayout()
@@ -159,6 +166,7 @@ class _TrackPickerDialog(QDialog):
                 ColumnDef("title", "标题"),
                 ColumnDef("artist", "艺术家"),
                 ColumnDef("album", "专辑"),
+                ColumnDef("bound_lyrics", "已绑歌词"),
                 ColumnDef("track_id", "数据库ID"),
             ]
         )
@@ -176,14 +184,42 @@ class _TrackPickerDialog(QDialog):
         self.btn_cancel = self.buttons.addButton("取消", QDialogButtonBox.ButtonRole.RejectRole)
         self.btn_clear = self.buttons.addButton("清空映射", QDialogButtonBox.ButtonRole.DestructiveRole)
 
+        split = QSplitter(Qt.Orientation.Horizontal)
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(self.table, 1)
+        split.addWidget(left)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(8, 0, 0, 0)
+        right_layout.addWidget(QLabel("当前歌词预览"))
+        self.preview = QPlainTextEdit()
+        self.preview.setReadOnly(True)
+        self.preview.setPlainText(str(lyrics_preview_text or "").strip() or "（无可用歌词预览）")
+        right_layout.addWidget(self.preview, 1)
+        split.addWidget(right)
+        split.setStretchFactor(0, 3)
+        split.setStretchFactor(1, 2)
+
         root.addLayout(top)
-        root.addWidget(self.table, 1)
+        root.addWidget(split, 1)
         root.addWidget(self.buttons)
 
-        self._all_rows = self.facade.list_tracks(limit=200_000)
+        all_rows = self.facade.list_tracks(limit=200_000)
+        self._all_rows = []
+        for row in all_rows:
+            item = dict(row)
+            source = str(item.get("lyrics_source", "") or "").replace("\\", "/").strip()
+            item["bound_lyrics"] = Path(source).name if source else ""
+            self._all_rows.append(item)
+        if str(initial_query or "").strip():
+            self.search_input.setText(str(initial_query).strip())
         self._apply_filter()
 
         self.btn_search.clicked.connect(self._apply_filter)
+        self.search_input.textChanged.connect(lambda _text: self._apply_filter())
         self.search_input.returnPressed.connect(self._apply_filter)
         self.table.doubleClicked.connect(lambda _idx: self._accept_selected())
         self.btn_ok.clicked.connect(self._accept_selected)
@@ -203,6 +239,7 @@ class _TrackPickerDialog(QDialog):
                         str(row.get("title", "")),
                         str(row.get("artist", "")),
                         str(row.get("album", "")),
+                        str(row.get("bound_lyrics", "")),
                     ]
                 ).casefold()
                 if token in text:
@@ -243,6 +280,9 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
         self._dynamic_buttons: list[QPushButton] = []
         self._song_group_controls: dict[str, dict] = {}
         self._lyrics_group_controls: dict[str, dict] = {}
+        self._lyrics_row_controls: dict[str, dict] = {}
+        self._lyrics_review_order: list[dict] = []
+        self._lyrics_map_dialog_open = False
 
         root = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -428,6 +468,18 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                 existing_track_id = str(payload.get("existing_track_id") or "")
                 track_meta = self._track_map.get(existing_track_id) or {}
                 source_path = str(payload.get("path", "") or "")
+                candidate_path = str(track_meta.get("source_fullpath", "") or "")
+                candidate_file_name = str(track_meta.get("file_name", "") or "").strip()
+                if not candidate_file_name:
+                    candidate_file_name = Path(
+                        str(track_meta.get("source_relpath", "") or track_meta.get("storage_relpath", "") or candidate_path)
+                    ).name
+                if candidate_file_name.startswith("trk_"):
+                    source_full = str(track_meta.get("source_fullpath", "") or "").strip()
+                    if source_full:
+                        source_name = Path(source_full).name
+                        if source_name:
+                            candidate_file_name = source_name
                 song_rows.append(
                     {
                         "review_id": review_id,
@@ -440,19 +492,24 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                         "source_path": source_path,
                         "candidate_track_id": existing_track_id,
                         "candidate_track": _track_label(track_meta) if track_meta else existing_track_id,
-                        "candidate_file_name": str(track_meta.get("file_name", "") or ""),
-                        "candidate_path": str(track_meta.get("source_fullpath", "") or ""),
+                        "candidate_file_name": candidate_file_name,
+                        "candidate_path": candidate_path,
                         "candidate_duration_sec": _safe_float(track_meta.get("duration_sec", 0), 0),
                         "score": _safe_float(payload.get("score", 0), 0.0),
                         "reason": str(payload.get("reason", "") or "疑似重复音频").replace("原因", ""),
                         "candidate_meta": dict(track_meta),
-                        "restore_track_id": existing_track_id if review_title == "已删除歌曲重新导入" else "",
+                        "restore_track_id": existing_track_id if review_title in {"已删除歌曲重新导入", "reimport_deleted_track"} else "",
                         "deferred_import": bool(payload.get("deferred_import", False)),
                     }
                 )
                 continue
 
-            if kind == "file_issue" and str(row.get("title", "") or "") in {"指纹提取失败", "响度归一不可用"}:
+            if kind == "file_issue" and str(row.get("title", "") or "") in {
+                "指纹提取失败",
+                "响度归一不可用",
+                "fingerprint_failed",
+                "loudness_normalization_unavailable",
+            }:
                 source_path = str(payload.get("path", "") or "")
                 source_file = Path(source_path).name
                 title_hint = str(payload.get("title_hint", "") or "")
@@ -464,6 +521,18 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                             continue
                         tid = str(sug.get("track_id", "") or "")
                         track_meta = self._track_map.get(tid) or {}
+                        candidate_path = str(track_meta.get("source_fullpath", "") or "")
+                        candidate_file_name = str(track_meta.get("file_name", "") or "").strip()
+                        if not candidate_file_name:
+                            candidate_file_name = Path(
+                                str(track_meta.get("source_relpath", "") or track_meta.get("storage_relpath", "") or candidate_path)
+                            ).name
+                        if candidate_file_name.startswith("trk_"):
+                            source_full = str(track_meta.get("source_fullpath", "") or "").strip()
+                            if source_full:
+                                source_name = Path(source_full).name
+                                if source_name:
+                                    candidate_file_name = source_name
                         song_rows.append(
                             {
                                 "review_id": review_id,
@@ -473,8 +542,8 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                                 "source_path": source_path,
                                 "candidate_track_id": tid,
                                 "candidate_track": _track_label(track_meta) if track_meta else str(sug.get("title", "") or tid),
-                                "candidate_file_name": str(track_meta.get("file_name", "") or ""),
-                                "candidate_path": str(track_meta.get("source_fullpath", "") or ""),
+                                "candidate_file_name": candidate_file_name,
+                                "candidate_path": candidate_path,
                                 "candidate_duration_sec": _safe_float(track_meta.get("duration_sec", 0), 0),
                                 "score": _safe_float(sug.get("score", 0), 0.0),
                                 "reason": f"指纹失败/名称相近 {title_hint}",
@@ -526,8 +595,11 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                         "lyrics_source": source_rel,
                         "lyrics_file": Path(source_rel).name,
                         "lyrics_id": str(payload.get("lyrics_id") or matched.get("lyrics_id") or ""),
+                        "lyrics_title": str(matched.get("lyrics_title", "") or ""),
+                        "lyrics_artist": str(matched.get("lyrics_artist", "") or ""),
                         "storage_relpath": storage_relpath,
                         "suggest_track": _track_label(suggest_track) if suggest_track else suggest_id,
+                        "suggest_track_id": suggest_id,
                         "score": _safe_float(payload.get("score", 0), 0.0),
                         "reason": str(payload.get("reason", "") or "匹配置信度不足").replace("原因", ""),
                         "line_count": _safe_int(matched.get("line_count", 0), 0),

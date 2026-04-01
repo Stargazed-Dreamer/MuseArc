@@ -111,7 +111,7 @@ def save_resume_state(path: Path, state: ResumeState) -> None:
         "created_storage_relpaths": state.created_storage_relpaths,
         "soft_deleted_existing_ids": state.soft_deleted_existing_ids,
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
 def load_resume_state(path: Path) -> ResumeState | None:

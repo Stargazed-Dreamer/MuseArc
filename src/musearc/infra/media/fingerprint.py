@@ -73,19 +73,50 @@ class AcousticFingerprintEngine:
     def __init__(self) -> None:
         self._backend = "chromaprint"
         self.version = 3
+        self._chromaprint_checked = False
+        self._chromaprint_available = False
 
     def _can_use_chromaprint(self) -> bool:
+        # Never perform expensive reload checks for every pairwise similarity call.
+        # Probe once and cache the result for this engine instance.
+        if self._chromaprint_checked:
+            return bool(self._chromaprint_available)
+        self._chromaprint_checked = True
         if _acoustid is None:
+            self._chromaprint_available = False
             return False
         have = bool(getattr(_acoustid, "have_chromaprint", False))
         if have:
+            self._chromaprint_available = True
             return True
-        # If acoustid was imported before DLL path was prepared, retry once by reloading.
+        # If acoustid was imported before DLL path was prepared, retry once.
         try:
             reloaded = importlib.reload(_acoustid)
+            self._chromaprint_available = bool(getattr(reloaded, "have_chromaprint", False))
         except Exception:
-            return False
-        return bool(getattr(reloaded, "have_chromaprint", False))
+            self._chromaprint_available = False
+        return bool(self._chromaprint_available)
+
+    @property
+    def chromaprint_available(self) -> bool:
+        return self._can_use_chromaprint()
+
+    def fingerprint_hash32(self, payload: str) -> int | None:
+        """Return Chromaprint-provided 32-bit hash for a stored payload."""
+        if not self._can_use_chromaprint():
+            return None
+        try:
+            import chromaprint
+        except Exception:
+            return None
+        try:
+            raw = bytes(self.decode_vector(payload))
+            if not raw:
+                return None
+            decoded, _algo = chromaprint.decode_fingerprint(raw)
+            return int(chromaprint.hash_fingerprint(decoded))
+        except Exception:
+            return None
 
     def fingerprint_file(self, audio_path) -> Fingerprint:
         decoded = decode_audio(audio_path, target_rate=22050, target_layout="mono")

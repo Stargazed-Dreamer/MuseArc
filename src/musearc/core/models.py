@@ -23,6 +23,7 @@ class ProbeInfo:
     cover_width: int | None = None
     cover_height: int | None = None
     cover_bytes: int | None = None
+    tags: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -82,6 +83,7 @@ class LyricsInsert:
     lyrics_album: str = ""
     lyrics_author: str = ""
     line_count: int = 0
+    ext_json: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

@@ -10,8 +10,10 @@
 import json
 import hashlib
 import html
+import os
 import re
 import shutil
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +31,7 @@ from musearc.infra.llm.client import LmStudioMatcher
 from musearc.infra.media.audio_io import decode_audio
 from musearc.infra.media.commands import MediaCommandError
 from musearc.infra.media.fingerprint import AcousticFingerprintEngine
-from musearc.infra.media.prober import MediaProbe
+from musearc.infra.media.prober import MediaProbe, repair_metadata_text, seems_mojibake_text
 from musearc.infra.media.transcoder import MediaTranscoder
 from musearc.services.dedupe import DuplicateEvaluator, infer_track_kind
 from musearc.services.import_runtime import ImportControl, ResumeState, delete_resume_state
@@ -47,39 +49,150 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _derive_title_artist(path: Path, probe_title: str | None, probe_artist: str | None) -> tuple[str, str]:
-    if probe_title and probe_artist:
-        return probe_title.strip(), probe_artist.strip()
+def _normalize_tag_key(key: str) -> str:
+    return str(key or "").strip().lower().replace("_", "").replace("-", "").replace(" ", "")
 
-    stem = path.stem
-    if " - " in stem:
-        artist, title = stem.split(" - ", 1)
-        artist = artist.strip() or "Unknown Artist"
-        title = title.strip() or stem.strip()
+
+def _pick_probe_tag(tags: dict[str, str], *keys: str) -> str:
+    if not isinstance(tags, dict):
+        return ""
+    for key in keys:
+        value = str(tags.get(key, "") or "").strip()
+        if value:
+            return value
+    wanted = {_normalize_tag_key(key) for key in keys if str(key).strip()}
+    for key, value in tags.items():
+        if _normalize_tag_key(str(key)) in wanted:
+            text = str(value or "").strip()
+            if text:
+                return text
+    return ""
+
+
+def _is_unknown_text(value: str, *, kind: str) -> bool:
+    text = str(value or "").strip().casefold()
+    if kind == "title":
+        return text in {"", "unknown", "unknown title"}
+    if kind == "artist":
+        return text in {"", "unknown", "unknown artist", "various artists"}
+    if kind == "album":
+        return text in {"", "unknown", "unknown album"}
+    return text == ""
+
+
+def _parse_title_artist_from_stem(stem: str) -> tuple[str, str]:
+    def _artist_likelihood(text: str) -> int:
+        value = str(text or "").strip()
+        if not value:
+            return -2
+        low = value.casefold()
+        score = 0
+        if any(token in low for token in ("feat", "ft.", " ft ", " x ", "&", " with ")):
+            score += 2
+        if any(token in value for token in ("、", "丨", "/", ";", ",")):
+            score += 1
+        if len(value) >= 14:
+            score += 1
+        if low.startswith("dj ") or low.startswith("mc "):
+            score += 1
+        if any(token in low for token in ("ost", "theme", "op", "ed", "instrumental")):
+            score -= 1
+        return score
+
+    name = str(stem or "").strip()
+    if not name:
+        return "Unknown Title", "Unknown Artist"
+    for sep in (" - ", " — ", " – ", " _ ", "-", "—", "–"):
+        if sep not in name:
+            continue
+        left, right = name.split(sep, 1)
+        left = left.strip()
+        right = right.strip()
+        if not left or not right:
+            continue
+        # 文件名约定默认按 artist - title；当右侧更像“艺术家名”时自动反转。
+        left_artist_score = _artist_likelihood(left)
+        right_artist_score = _artist_likelihood(right)
+        if right_artist_score >= left_artist_score + 2:
+            return left, right
+        return right, left
+    return name, "Unknown Artist"
+
+
+def _derive_title_artist(
+    path: Path,
+    probe_title: str | None,
+    probe_artist: str | None,
+    probe_tags: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    tags = probe_tags or {}
+    tag_title = repair_metadata_text(_pick_probe_tag(tags, "title", "TIT2", "\u00a9nam"))
+    tag_artist = repair_metadata_text(_pick_probe_tag(tags, "artist", "album_artist", "TPE1", "TPE2", "\u00a9ART"))
+    title = repair_metadata_text(probe_title or tag_title or "")
+    artist = repair_metadata_text(probe_artist or tag_artist or "")
+
+    if seems_mojibake_text(title):
+        title = ""
+    if seems_mojibake_text(artist):
+        artist = ""
+
+    if not _is_unknown_text(title, kind="title") and not _is_unknown_text(artist, kind="artist"):
         return title, artist
 
-    return (probe_title or stem.strip() or "Unknown Title"), (probe_artist or "Unknown Artist")
+    parsed_title, parsed_artist = _parse_title_artist_from_stem(path.stem)
+    if _is_unknown_text(title, kind="title"):
+        title = parsed_title
+    if _is_unknown_text(artist, kind="artist"):
+        artist = parsed_artist
+
+    if _is_unknown_text(title, kind="title"):
+        title = path.stem.strip() or "Unknown Title"
+    if _is_unknown_text(artist, kind="artist"):
+        artist = "Unknown Artist"
+    return title, artist
 
 
-def _quality_score(duration_sec: float, bit_rate: int | None, source_ext: str) -> float:
-    score = 0.35
+def _quality_score(
+    duration_sec: float,
+    bit_rate: int | None,
+    source_ext: str,
+    sample_rate: int | None = None,
+    file_size_bytes: int | None = None,
+) -> float:
+    score = 0.12
+    kbps = 0.0
     if bit_rate:
-        score += min(0.4, bit_rate / 1_000_000)
+        kbps = max(0.0, float(bit_rate) / 1000.0)
+    elif duration_sec > 0 and file_size_bytes and int(file_size_bytes) > 0:
+        kbps = max(0.0, (float(file_size_bytes) * 8.0) / 1000.0 / max(1.0, float(duration_sec)))
+
+    if kbps > 0.0:
+        score += min(0.18, kbps / 1200.0)
+    if sample_rate:
+        score += min(0.08, max(0.0, float(sample_rate) - 22050.0) / 88200.0)
+    if duration_sec >= 60:
+        score += 0.02
     if duration_sec >= 180:
-        score += 0.15
+        score += 0.03
     ext = source_ext.lower().strip()
     format_bonus = {
-        ".flac": 0.22,
-        ".wav": 0.20,
-        ".ape": 0.19,
-        ".m4a": 0.13,
-        ".aac": 0.12,
-        ".opus": 0.12,
-        ".ogg": 0.10,
-        ".wma": 0.08,
-        ".mp3": 0.06,
+        ".flac": 0.58,
+        ".wav": 0.56,
+        ".ape": 0.54,
+        ".alac": 0.52,
+        ".m4a": 0.45,
+        ".aac": 0.43,
+        ".opus": 0.42,
+        ".ogg": 0.41,
+        ".wma": 0.34,
+        ".mp3": 0.32,
     }
-    score += format_bonus.get(ext, 0.05)
+    score += format_bonus.get(ext, 0.30)
+    if ext in {".flac", ".wav", ".ape", ".alac"} and kbps > 0.0:
+        score += min(0.08, kbps / 2500.0)
+    if kbps <= 0.0 and ext in {".ogg", ".opus", ".m4a", ".aac"}:
+        # VBR 编码常见无稳定比特率字段，降低缺失带来的误判。
+        score += 0.04
     return min(1.0, max(0.0, score))
 
 
@@ -145,7 +258,16 @@ def _cover_payload_from_probe(probe: ProbeInfo) -> dict:
 
 
 def _build_track_ext_payload(probe: ProbeInfo) -> dict:
-    payload = {"tags": {}}
+    tags: dict[str, str] = {}
+    if isinstance(probe.tags, dict):
+        for key, value in probe.tags.items():
+            k = str(key or "").strip()
+            v = str(value or "").strip()
+            if not k or not v:
+                continue
+            tags[k] = v
+    payload = {"tags": tags}
+    payload["metadata_source"] = "id3" if tags else "filename_fallback"
     cover = _cover_payload_from_probe(probe)
     if cover:
         payload["cover"] = cover
@@ -239,6 +361,145 @@ def _is_placeholder_empty_lyrics(text: str) -> bool:
     return compact == marker_compact
 
 
+def _infer_lyrics_language_kind(text: str) -> str:
+    """基于歌词正文字符分布推断语言类型。"""
+    if not text:
+        return "unknown"
+    lines: list[str] = []
+    for raw in text.splitlines():
+        s = str(raw or "").strip()
+        if not s:
+            continue
+        low = s.casefold()
+        if re.match(r"^\[[0-9]{1,2}:[0-9]{2}", s):
+            s = re.sub(r"^\[[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?(?:\.[0-9]{1,3})?\]\s*", "", s)
+        if re.match(r"^\[(ti|ar|al|by|offset):", low):
+            continue
+        lines.append(s)
+    body = "\n".join(lines).strip()
+    if not body:
+        return "unknown"
+
+    script_counts = {
+        "latin": 0,
+        "han": 0,
+        "hiragana": 0,
+        "katakana": 0,
+        "hangul": 0,
+        "cyrillic": 0,
+        "arabic": 0,
+        "hebrew": 0,
+        "thai": 0,
+        "devanagari": 0,
+    }
+    latin_ext = 0
+    total_letters = 0
+
+    for ch in body:
+        if ch.isspace() or ch.isdigit():
+            continue
+        cat = unicodedata.category(ch)
+        if not cat.startswith("L"):
+            continue
+        total_letters += 1
+        code = ord(ch)
+        if 0x4E00 <= code <= 0x9FFF:
+            script_counts["han"] += 1
+        elif 0x3040 <= code <= 0x309F:
+            script_counts["hiragana"] += 1
+        elif 0x30A0 <= code <= 0x30FF:
+            script_counts["katakana"] += 1
+        elif 0xAC00 <= code <= 0xD7AF:
+            script_counts["hangul"] += 1
+        elif 0x0400 <= code <= 0x04FF:
+            script_counts["cyrillic"] += 1
+        elif 0x0600 <= code <= 0x06FF:
+            script_counts["arabic"] += 1
+        elif 0x0590 <= code <= 0x05FF:
+            script_counts["hebrew"] += 1
+        elif 0x0E00 <= code <= 0x0E7F:
+            script_counts["thai"] += 1
+        elif 0x0900 <= code <= 0x097F:
+            script_counts["devanagari"] += 1
+        elif "LATIN" in unicodedata.name(ch, ""):
+            script_counts["latin"] += 1
+            if code > 0x007F:
+                latin_ext += 1
+
+    if total_letters <= 0:
+        return "unknown"
+
+    def _ratio(value: int) -> float:
+        return float(value) / float(total_letters)
+
+    ja_ratio = _ratio(script_counts["hiragana"] + script_counts["katakana"] + script_counts["han"])
+    if ja_ratio >= 0.9 and (script_counts["hiragana"] + script_counts["katakana"]) > 0:
+        return "ja"
+    if _ratio(script_counts["hangul"]) >= 0.9:
+        return "ko"
+    if _ratio(script_counts["han"]) >= 0.9:
+        return "zh"
+    if _ratio(script_counts["cyrillic"]) >= 0.9:
+        return "ru"
+    if _ratio(script_counts["arabic"]) >= 0.9:
+        return "ar"
+    if _ratio(script_counts["hebrew"]) >= 0.9:
+        return "he"
+    if _ratio(script_counts["thai"]) >= 0.9:
+        return "th"
+    if _ratio(script_counts["devanagari"]) >= 0.9:
+        return "hi"
+
+    latin_ratio = _ratio(script_counts["latin"])
+    if latin_ratio >= 0.9:
+        lower = body.casefold()
+        words = {w for w in re.split(r"[^a-zA-ZÀ-ÿ]+", lower) if w}
+        marks = {
+            "es": {"á", "é", "í", "ó", "ú", "ñ", "ü"},
+            "fr": {"à", "â", "ç", "é", "è", "ê", "ë", "î", "ï", "ô", "û", "ù", "ü", "ÿ", "œ", "æ"},
+            "de": {"ä", "ö", "ü", "ß"},
+            "pt": {"ã", "õ", "ç", "á", "é", "í", "ó", "ú"},
+            "it": {"à", "è", "é", "ì", "í", "î", "ò", "ó", "ù"},
+            "vi": {"ă", "â", "đ", "ê", "ô", "ơ", "ư"},
+        }
+        stop = {
+            "en": {"the", "and", "you", "to", "of", "in", "is", "my", "me"},
+            "es": {"que", "de", "la", "el", "y", "en", "no", "te", "se"},
+            "fr": {"je", "tu", "il", "elle", "de", "la", "le", "et", "pas", "que", "un", "une"},
+            "de": {"und", "ich", "nicht", "die", "das", "du"},
+            "pt": {"nao", "não", "de", "que", "eu", "voce", "você", "uma", "com"},
+            "it": {"che", "di", "non", "io", "tu", "la", "il", "e"},
+            "vi": {"va", "la", "mot", "nhung", "khong", "toi", "em", "anh"},
+        }
+        best_lang = "en"
+        best_score = 0.0
+        for lang, stop_words in stop.items():
+            hit_words = len(words.intersection(stop_words))
+            mark_hits = sum(1 for ch in body if ch in marks.get(lang, set()))
+            score = (hit_words * 1.0) + (mark_hits * 0.6)
+            if lang == "en":
+                score += max(0, script_counts["latin"] - latin_ext) * 0.0001
+            if score > best_score:
+                best_score = score
+                best_lang = lang
+        if best_score <= 0.0 and latin_ext > 0:
+            if any(ch in body for ch in marks["es"]):
+                return "es"
+            if any(ch in body for ch in marks["fr"]):
+                return "fr"
+            if any(ch in body for ch in marks["pt"]):
+                return "pt"
+            if any(ch in body for ch in marks["it"]):
+                return "it"
+            if any(ch in body for ch in marks["de"]):
+                return "de"
+            if any(ch in body for ch in marks["vi"]):
+                return "vi"
+        return best_lang
+
+    return "mixed"
+
+
 def _normalize_name_for_compare(value: str) -> str:
     text = str(value or "")
     text = re.sub(r"[\(\[【{（].*?[\)\]】}）]", " ", text)
@@ -290,14 +551,37 @@ class ImportService:
         """\u521d\u59cb\u5316\u5bfc\u5165\u670d\u52a1\u53ca\u5176\u4f9d\u8d56\u7ec4\u4ef6\u3002"""
         self.library_root = library_root
         self.runtime_cfg = runtime_cfg
+        self.fingerprint_workers = self._resolve_worker_count(getattr(runtime_cfg.ui, "fingerprint_workers", 0), default_cap=2)
+        duplicate_workers = self._resolve_worker_count(getattr(runtime_cfg.ui, "duplicate_compare_workers", 0), default_cap=8)
+        lyrics_workers = self._resolve_worker_count(getattr(runtime_cfg.ui, "lyrics_match_workers", 0), default_cap=8)
+        duplicate_threshold = max(1, int(getattr(runtime_cfg.ui, "duplicate_compare_parallel_threshold", 48) or 48))
+        lyrics_threshold = max(1, int(getattr(runtime_cfg.ui, "lyrics_match_parallel_threshold", 96) or 96))
         self.dependencies = ImportDependencies(
             probe=MediaProbe(),
             transcoder=MediaTranscoder(),
             fingerprint=AcousticFingerprintEngine(),
         )
-        self.duplicate_evaluator = DuplicateEvaluator(self.dependencies.fingerprint, runtime_cfg.thresholds)
+        self.duplicate_evaluator = DuplicateEvaluator(
+            self.dependencies.fingerprint,
+            runtime_cfg.thresholds,
+            compare_workers=duplicate_workers,
+            parallel_threshold=duplicate_threshold,
+        )
         llm = LmStudioMatcher(runtime_cfg.lmstudio) if runtime_cfg.lmstudio.enabled else None
-        self.lyrics_matcher = LyricsMatcher(runtime_cfg.thresholds, llm)
+        self.lyrics_matcher = LyricsMatcher(
+            runtime_cfg.thresholds,
+            llm,
+            score_workers=lyrics_workers,
+            parallel_threshold=lyrics_threshold,
+        )
+
+    @staticmethod
+    def _resolve_worker_count(value: int | None, *, default_cap: int = 8) -> int:
+        """\u5c06\u914d\u7f6e\u4e2d\u7684\u5e76\u53d1\u503c\u89c4\u8303\u5316\u4e3a\u5b89\u5168\u7684\u7ebf\u7a0b\u6570\u3002"""
+        parsed = int(value or 0)
+        if parsed <= 0:
+            return max(1, min(default_cap, (os.cpu_count() or 4) - 1))
+        return max(1, min(16, parsed))
 
     def _skipped_path_registry_file(self) -> Path:
         """\u8fd4\u56de\u5386\u53f2\u8df3\u8fc7\u97f3\u9891\u8def\u5f84\u7d22\u5f15\u6587\u4ef6\u8def\u5f84\u3002"""
@@ -422,8 +706,19 @@ class ImportService:
         source = Path(source_path).expanduser().resolve()
         probe = self.dependencies.probe.probe(source)
         fp = self._fingerprint_with_loudness_normalization(source, target_lufs=-14.0)
-        title, artist = _derive_title_artist(source, probe.title, probe.artist)
-        quality = _quality_score(probe.duration_sec, probe.bit_rate, source.suffix)
+        title, artist = _derive_title_artist(source, probe.title, probe.artist, probe.tags)
+        file_size = None
+        try:
+            file_size = int(source.stat().st_size)
+        except Exception:
+            file_size = None
+        quality = _quality_score(
+            probe.duration_sec,
+            probe.bit_rate,
+            source.suffix,
+            probe.sample_rate,
+            file_size,
+        )
         fp_payload = self.dependencies.fingerprint.encode_vector(fp.vector)
         ext_payload = _build_track_ext_payload(probe)
         source_sha = sha256_file(source)
@@ -444,7 +739,7 @@ class ImportService:
             file_name=source.name,
             title=title,
             artist=artist,
-            album=(probe.album or ""),
+            album=repair_metadata_text(probe.album or ""),
             language_kind="unknown",
             preference_level=5,
             storage_format=ext_no_dot,
@@ -483,7 +778,7 @@ class ImportService:
                     merge_patch["title"] = str(existing.get("title", "")).strip()
                 if str(artist or "").strip().casefold() in {"", "unknown", "unknown artist"} and str(existing.get("artist", "")).strip():
                     merge_patch["artist"] = str(existing.get("artist", "")).strip()
-                if not str(probe.album or "").strip() and str(existing.get("album", "")).strip():
+                if not str(repair_metadata_text(probe.album or "")).strip() and str(existing.get("album", "")).strip():
                     merge_patch["album"] = str(existing.get("album", "")).strip()
                 if merge_patch:
                     repo.update_tracks_fields([track_id], merge_patch)
@@ -552,11 +847,25 @@ class ImportService:
             errors=state.errors,
         )
 
-    def _wait_control(self, control: ImportControl | None, emit, current_file: str) -> tuple[bool, str]:
+    def _wait_control(
+        self,
+        control: ImportControl | None,
+        emit,
+        current_file: str,
+        *,
+        on_paused=None,
+    ) -> tuple[bool, str]:
         """\u6839\u636e\u6682\u505c/\u53d6\u6d88\u63a7\u5236\u963b\u585e\u6216\u7ec8\u6b62\u5f53\u524d\u5bfc\u5165\u3002"""
         if control is None:
             return False, "keep"
+        pause_notified = False
         while control.is_paused():
+            if not pause_notified and callable(on_paused):
+                try:
+                    on_paused()
+                except Exception:
+                    pass
+                pause_notified = True
             emit("paused", current_file, force=True, paused=True)
             control.wait_if_paused(timeout_sec=0.2)
             cancelled, mode, _ = control.snapshot()

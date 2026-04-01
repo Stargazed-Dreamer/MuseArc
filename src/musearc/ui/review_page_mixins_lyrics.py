@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """审查页面-歌词审查区 Mixin。
 
@@ -6,7 +6,8 @@ from __future__ import annotations
 """
 
 import re
-from collections import defaultdict
+import subprocess
+from collections import defaultdict, deque
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -40,6 +41,17 @@ def _lyrics_file_bracket_count(file_name: str) -> int:
     return len(re.findall(r"[\(\[\uFF08\u3010].*?[\)\]\uFF09\u3011]", stem))
 
 
+def _lyrics_row_key(row: dict) -> str:
+    payload = row if isinstance(row, dict) else {}
+    return "|".join(
+        [
+            str(payload.get("review_id", "") or ""),
+            str(payload.get("lyrics_source", "") or ""),
+            str(payload.get("lyrics_id", "") or ""),
+        ]
+    ).strip("|")
+
+
 class _ClickableFrame(QFrame):
     clicked = Signal()
 
@@ -68,6 +80,8 @@ class ReviewPageLyricsMixin:
     def _fill_lyrics_tree(self, rows: list[dict]) -> None:
         """\u6784\u5efa\u6b4c\u8bcd\u5ba1\u67e5\u5206\u7ec4\u754c\u9762\uff08\u6bcf\u7ec4\u72ec\u7acb frame\uff09\u3002"""
         self._lyrics_group_controls.clear()
+        self._lyrics_row_controls = {}
+        self._lyrics_review_order = []
         self._clear_group_layout(self.lyrics_groups_layout)
         groups: dict[str, list[dict]] = defaultdict(list)
         for row in rows:
@@ -119,6 +133,10 @@ class ReviewPageLyricsMixin:
             for row in group_rows:
                 row_ctrl = self._build_lyrics_row_widget(row)
                 row_controls.append(row_ctrl)
+                row_key = _lyrics_row_key(row)
+                if row_key:
+                    self._lyrics_row_controls[row_key] = row_ctrl
+                self._lyrics_review_order.append(dict(row))
                 host.addWidget(row_ctrl["container"])
 
             row_ops_host = QWidget()
@@ -128,11 +146,13 @@ class ReviewPageLyricsMixin:
             btn_invert = QPushButton("反选")
             btn_same = QPushButton("这是相同歌词")
             btn_diff = QPushButton("这是不同歌词")
+            btn_merge = QPushButton("合并展示的歌词")
             btn_save = QPushButton("保存勾选的文件")
             btn_cancel = QPushButton("取消导入")
             row_ops.addWidget(btn_invert)
             row_ops.addWidget(btn_same)
             row_ops.addWidget(btn_diff)
+            row_ops.addWidget(btn_merge)
             row_ops.addWidget(btn_save)
             row_ops.addWidget(btn_cancel)
             row_ops.addStretch(1)
@@ -143,11 +163,13 @@ class ReviewPageLyricsMixin:
             btn_invert.clicked.connect(lambda _=False, g=controls: self._invert_lyrics_group(g))
             btn_same.clicked.connect(lambda _=False, g=controls: self._apply_lyrics_preset_same_for_group(g))
             btn_diff.clicked.connect(lambda _=False, g=controls: self._apply_lyrics_preset_diff_for_group(g))
+            btn_merge.clicked.connect(lambda _=False, g=controls: self._merge_preview_lyrics_for_group(g))
             btn_save.clicked.connect(lambda _=False, g=controls: self._save_lyrics_group(g))
             btn_cancel.clicked.connect(lambda _=False, g=controls: self._cancel_lyrics_group(g))
             self._register_dynamic_button(btn_invert)
             self._register_dynamic_button(btn_same)
             self._register_dynamic_button(btn_diff)
+            self._register_dynamic_button(btn_merge)
             self._register_dynamic_button(btn_save)
             self._register_dynamic_button(btn_cancel)
 
@@ -175,6 +197,8 @@ class ReviewPageLyricsMixin:
         checkbox = QCheckBox()
         checkbox.setChecked(False)
         checkbox.setStyleSheet("QCheckBox::indicator{width:28px;height:28px;}")
+        btn_reveal = QPushButton("📁")
+        btn_reveal.setFixedWidth(34)
         lbl_file = _ClickableLabel(str(payload.get("lyrics_file", "") or ""))
         lbl_file.setMinimumWidth(260)
         lbl_file.setToolTip(str(payload.get("lyrics_source", "") or ""))
@@ -188,6 +212,7 @@ class ReviewPageLyricsMixin:
         lbl_reason.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         row_layout.addWidget(checkbox)
+        row_layout.addWidget(btn_reveal)
         row_layout.addWidget(lbl_file, 3)
         row_layout.addWidget(lbl_score)
         row_layout.addWidget(lbl_reason, 2)
@@ -232,20 +257,35 @@ class ReviewPageLyricsMixin:
             "row": payload,
             "container": container,
             "checkbox": checkbox,
+            "bind_text_label": bind_text,
         }
 
         def _preview() -> None:
             self._on_lyrics_row_clicked(payload)
 
         def _edit_mapping() -> None:
-            self._map_lyrics_row(payload)
+            self._map_lyrics_row(payload, chain_next=True)
 
         checkbox.clicked.connect(lambda _checked=False: _preview())
         top.clicked.connect(_preview)
+        btn_reveal.clicked.connect(lambda _=False, p=dict(payload): self._reveal_lyrics_file(p))
         link_bind_row.clicked.connect(_edit_mapping)
         if link_suggest_row is not None:
             link_suggest_row.clicked.connect(_edit_mapping)
         return row_ctrl
+
+    def _reveal_lyrics_file(self, row: dict) -> None:
+        storage_rel = str((row or {}).get("storage_relpath", "") or "").strip()
+        if not storage_rel:
+            return
+        target = Path(self.facade.library_root) / storage_rel
+        try:
+            if target.exists():
+                subprocess.Popen(["explorer", "/select,", str(target)])
+            elif target.parent.exists():
+                subprocess.Popen(["explorer", str(target.parent)])
+        except Exception:
+            return
 
     def _on_lyrics_row_clicked(self, row: dict) -> None:
         """\u66f4\u65b0\u6b4c\u8bcd\u53cc\u680f\u9884\u89c8\u961f\u5217\uff08\u6700\u8fd1\u4e24\u4e2a\u6761\u76ee\uff09\u3002"""
@@ -370,21 +410,83 @@ class ReviewPageLyricsMixin:
             rows = [rows[0], rows[0]]
         self.preview_left.setPlainText(self._read_lyrics_text(rows[-2]))
         self.preview_right.setPlainText(self._read_lyrics_text(rows[-1]))
+    def _lyrics_title_hint(self, row: dict) -> str:
+        title = str((row or {}).get("lyrics_title", "") or "").strip()
+        if title:
+            return title
+        preview = str((row or {}).get("preview", "") or "")
+        for line in preview.splitlines()[:30]:
+            s = str(line or "").strip()
+            low = s.casefold()
+            if low.startswith("[ti:") and s.endswith("]"):
+                return s[4:-1].strip()
+        source = str((row or {}).get("lyrics_source", "") or "")
+        return Path(source).stem.strip()
 
-    def _map_lyrics_row(self, row: dict) -> None:
-        """\u6253\u5f00\u6b4c\u66f2\u9009\u62e9\u7a97\u53e3\u5e76\u4fee\u6539\u6b4c\u8bcd\u7ed1\u5b9a\u3002"""
-        lyrics_id = str(row.get("lyrics_id", "") or "")
-        if not lyrics_id:
-            QMessageBox.warning(self, "修改建议歌曲", "当前行没有有效 lyrics_id。")
+    def _update_lyrics_bind_label(self, row: dict, track_id: str | None) -> None:
+        row_key = _lyrics_row_key(row)
+        if not row_key:
             return
-        # 避免循环依赖：在运行时从主审查模块拿选择对话框。
+        row_ctrl = self._lyrics_row_controls.get(row_key) if isinstance(self._lyrics_row_controls, dict) else None
+        if not isinstance(row_ctrl, dict):
+            return
+        label = row_ctrl.get("bind_text_label")
+        if not isinstance(label, QLabel):
+            return
+        if track_id:
+            track = self._track_map.get(str(track_id)) if isinstance(getattr(self, "_track_map", {}), dict) else None
+            if isinstance(track, dict):
+                title = str(track.get("title", "") or "")
+                artist = str(track.get("artist", "") or "")
+                label.setText(f"已绑定：{artist or 'Unknown Artist'} - {title or 'Unknown Title'}")
+                return
+        label.setText("点击绑定数据库歌曲")
+
+    def _next_lyrics_row_for_chain(self, row: dict) -> dict | None:
+        key = _lyrics_row_key(row)
+        if not key:
+            return None
+        order = self._lyrics_review_order if isinstance(self._lyrics_review_order, list) else []
+        for idx, item in enumerate(order):
+            if _lyrics_row_key(item) != key:
+                continue
+            if idx + 1 < len(order):
+                return dict(order[idx + 1])
+            return None
+        return None
+
+    def _map_lyrics_row(self, row: dict, *, chain_next: bool = True) -> None:
+        """打开歌曲选择窗口并修改歌词绑定，支持按当前顺序连续处理。"""
+        if self._lyrics_map_dialog_open:
+            return
         from musearc.ui.review_page import _TrackPickerDialog
 
-        picker = _TrackPickerDialog(self, self.facade)
-        if picker.exec() != QDialog.DialogCode.Accepted:
-            return
-        self.facade.set_primary_track_for_lyrics(lyrics_id, picker.selected_track_id)
-        self.reload_reviews()
+        current = dict(row or {})
+        self._lyrics_map_dialog_open = True
+        try:
+            while current:
+                lyrics_id = str(current.get("lyrics_id", "") or "")
+                if not lyrics_id:
+                    QMessageBox.warning(self, "修改建议歌曲", "当前行没有有效 lyrics_id。")
+                    return
+                picker = _TrackPickerDialog(
+                    self,
+                    self.facade,
+                    initial_query=self._lyrics_title_hint(current),
+                    lyrics_preview_text=self._read_lyrics_text(current),
+                )
+                if picker.exec() != QDialog.DialogCode.Accepted:
+                    return
+                self.facade.set_primary_track_for_lyrics(lyrics_id, picker.selected_track_id)
+                self._update_lyrics_bind_label(current, picker.selected_track_id)
+                if not chain_next:
+                    return
+                nxt = self._next_lyrics_row_for_chain(current)
+                if not nxt:
+                    return
+                current = nxt
+        finally:
+            self._lyrics_map_dialog_open = False
 
     def _read_lyrics_text(self, row: dict) -> str:
         """\u8bfb\u53d6\u6b4c\u8bcd\u6587\u4ef6\u6587\u672c\u7528\u4e8e\u9884\u89c8\u3002"""
@@ -441,6 +543,55 @@ class ReviewPageLyricsMixin:
             if isinstance(checkbox, QCheckBox):
                 checkbox.setChecked(not checkbox.isChecked())
 
+    def _merge_preview_lyrics_for_group(self, group: dict) -> None:
+        """将当前预览区最近两条歌词按时间轴合并到前者，并移除后者。"""
+        rows = list(self._preview_rows) if isinstance(self._preview_rows, deque) else []
+        if len(rows) < 2:
+            QMessageBox.information(self, "合并歌词", "请先在当前组内点击两条歌词用于预览。")
+            return
+
+        first = dict(rows[-2] or {})
+        second = dict(rows[-1] or {})
+        group_key = str((group or {}).get("group_key", "") or "")
+        first_key = str(first.get("group_title", "") or first.get("group_key", "") or "")
+        second_key = str(second.get("group_title", "") or second.get("group_key", "") or "")
+        if group_key and (first_key != group_key or second_key != group_key):
+            QMessageBox.warning(self, "合并歌词", "请在同一组内选择两条歌词后再执行合并。")
+            return
+
+        primary_id = str(first.get("lyrics_id", "") or "")
+        secondary_id = str(second.get("lyrics_id", "") or "")
+        if not primary_id or not secondary_id or primary_id == secondary_id:
+            QMessageBox.warning(self, "合并歌词", "当前两条记录无效，无法执行合并。")
+            return
+
+        first_name = str(first.get("lyrics_file", "") or first.get("file_name", "") or primary_id)
+        second_name = str(second.get("lyrics_file", "") or second.get("file_name", "") or secondary_id)
+        answer = QMessageBox.question(
+            self,
+            "合并歌词",
+            f"将【{second_name}】合并到【{first_name}】并移除后者，是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        review_ids = []
+        second_review_id = str(second.get("review_id", "") or "")
+        if second_review_id:
+            review_ids.append(second_review_id)
+        try:
+            self.facade.merge_lyrics_for_review(primary_id, secondary_id, resolve_review_ids=review_ids)
+        except Exception as exc:
+            QMessageBox.warning(self, "合并歌词", f"合并失败: {exc}")
+            return
+
+        self._preview_rows.clear()
+        self._preview_rows.append(first)
+        self.reload_reviews()
+        self.review_changed.emit()
+
     def _save_lyrics_group(self, group: dict) -> None:
         """\u4fdd\u5b58\u5f53\u524d\u6b4c\u8bcd\u5ba1\u67e5\u7ec4\u52fe\u9009\u7ed3\u679c\u3002"""
         status_by_review: dict[str, bool] = {}
@@ -481,3 +632,4 @@ class ReviewPageLyricsMixin:
         self.facade.resolve_reviews(ids, status="ignored")
         self.reload_reviews()
         self.review_changed.emit()
+

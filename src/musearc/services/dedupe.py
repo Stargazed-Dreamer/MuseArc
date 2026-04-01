@@ -1,5 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import difflib
+import os
+import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from musearc.config.models import ImportThresholds
@@ -26,6 +30,14 @@ def infer_track_kind(title: str) -> TrackKind:
 class DuplicateEvaluator:
     fp_engine: AcousticFingerprintEngine
     thresholds: ImportThresholds
+    compare_workers: int = 1
+    parallel_threshold: int = 48
+
+    def _resolve_workers(self) -> int:
+        value = int(self.compare_workers or 0)
+        if value <= 0:
+            return max(1, min(8, (os.cpu_count() or 4) - 1))
+        return max(1, min(16, value))
 
     def decide(
         self,
@@ -33,9 +45,45 @@ class DuplicateEvaluator:
         new_payload: str,
         new_quality: float,
         new_title: str,
+        new_artist: str | None = None,
+        new_duration_sec: float | None = None,
         new_source_ext: str | None = None,
         candidates: list[dict],
     ) -> DuplicateDecisionResult:
+        def _name_base(value: str) -> str:
+            text = re.sub(r"[\(\[【{（].*?[\)\]】}）]", " ", str(value or ""))
+            return normalize_text(text)
+
+        def _is_unknown_artist(value: str) -> bool:
+            text = normalize_text(str(value or ""))
+            return text in {"", "unknown", "unknown artist", "various artists"}
+
+        def _artist_compatible(
+            cand_artist: str,
+            new_artist_text: str,
+            *,
+            cand_title: str,
+            new_title_text: str,
+        ) -> bool:
+            cand_norm = normalize_text(cand_artist)
+            new_norm = normalize_text(new_artist_text)
+            if _is_unknown_artist(cand_norm) or _is_unknown_artist(new_norm):
+                return True
+            if cand_norm == new_norm:
+                return True
+            cand_title_norm = _name_base(cand_title)
+            new_title_norm = _name_base(new_title_text)
+            # 当艺术家字段疑似被标题污染时，降低严格匹配要求。
+            suspicious = {
+                cand_title_norm,
+                new_title_norm,
+                normalize_text(cand_title),
+                normalize_text(new_title_text),
+            }
+            if cand_norm in suspicious or new_norm in suspicious:
+                return True
+            return difflib.SequenceMatcher(None, cand_norm, new_norm).ratio() >= 0.88
+
         def _format_rank(value: str | None) -> int:
             text = str(value or "").lower().replace(".", "")
             rank = {
@@ -53,14 +101,65 @@ class DuplicateEvaluator:
 
         best_score = 0.0
         best_candidate: dict | None = None
+        workers = self._resolve_workers()
+        threshold = max(1, int(self.parallel_threshold or 1))
 
-        for candidate in candidates:
-            score = self.fp_engine.similarity(new_payload, candidate["fingerprint_payload"])
-            if score > best_score:
-                best_score = score
-                best_candidate = candidate
+        if workers > 1 and len(candidates) >= threshold:
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="dup-compare") as pool:
+                scores = pool.map(
+                    lambda row: self.fp_engine.similarity(new_payload, row["fingerprint_payload"]),
+                    candidates,
+                )
+                for candidate, score in zip(candidates, scores):
+                    if score > best_score:
+                        best_score = score
+                        best_candidate = candidate
+        else:
+            for candidate in candidates:
+                score = self.fp_engine.similarity(new_payload, candidate["fingerprint_payload"])
+                if score > best_score:
+                    best_score = score
+                    best_candidate = candidate
+
+        new_name_base = _name_base(new_title)
+        new_artist_text = str(new_artist or "")
+        metadata_candidate: dict | None = None
+        metadata_candidate_key: tuple[int, int] = (-1, -1)
+        if new_name_base and candidates:
+            for candidate in candidates:
+                cand_title = _name_base(str(candidate.get("title", "") or ""))
+                if not cand_title or cand_title != new_name_base:
+                    continue
+                if new_duration_sec is not None:
+                    try:
+                        cand_dur = float(candidate.get("duration_sec", 0) or 0)
+                    except Exception:
+                        cand_dur = 0.0
+                    if abs(cand_dur - float(new_duration_sec or 0.0)) > 10.0:
+                        continue
+                cand_artist = str(candidate.get("artist", "") or "")
+                if not _artist_compatible(
+                    cand_artist,
+                    new_artist_text,
+                    cand_title=str(candidate.get("title", "") or ""),
+                    new_title_text=new_title,
+                ):
+                    continue
+                fmt_rank = _format_rank(str(candidate.get("storage_format") or candidate.get("source_ext") or ""))
+                q_score = int(round(float(candidate.get("quality_score", 0.0) or 0.0) * 1000.0))
+                key = (fmt_rank, q_score)
+                if key > metadata_candidate_key:
+                    metadata_candidate = candidate
+                    metadata_candidate_key = key
 
         if not best_candidate:
+            if metadata_candidate:
+                return DuplicateDecisionResult(
+                    decision=DuplicateDecision.REVIEW,
+                    score=0.0,
+                    existing_track_id=str(metadata_candidate.get("track_id", "") or ""),
+                    reason="name_duration_match_needs_review",
+                )
             return DuplicateDecisionResult(
                 decision=DuplicateDecision.KEEP_BOTH,
                 score=0.0,
@@ -91,6 +190,27 @@ class DuplicateEvaluator:
                     existing_track_id=best_candidate["track_id"],
                     reason="replace_with_higher_quality",
                 )
+            if new_rank >= existing_rank + 6 and new_quality >= existing_quality - 0.08:
+                return DuplicateDecisionResult(
+                    decision=DuplicateDecision.KEEP_NEW,
+                    score=best_score,
+                    existing_track_id=best_candidate["track_id"],
+                    reason="replace_with_better_format",
+                )
+            if new_rank > existing_rank and new_quality >= existing_quality - 0.18:
+                return DuplicateDecisionResult(
+                    decision=DuplicateDecision.KEEP_NEW,
+                    score=best_score,
+                    existing_track_id=best_candidate["track_id"],
+                    reason="replace_with_better_format",
+                )
+            if new_rank >= existing_rank + 10 and new_quality >= existing_quality - 0.28:
+                return DuplicateDecisionResult(
+                    decision=DuplicateDecision.KEEP_NEW,
+                    score=best_score,
+                    existing_track_id=best_candidate["track_id"],
+                    reason="replace_with_better_format",
+                )
             if abs(new_quality - existing_quality) <= 0.08 and new_rank > existing_rank:
                 return DuplicateDecisionResult(
                     decision=DuplicateDecision.KEEP_NEW,
@@ -112,6 +232,14 @@ class DuplicateEvaluator:
                 score=best_score,
                 existing_track_id=best_candidate["track_id"],
                 reason="possible_duplicate_needs_review",
+            )
+
+        if metadata_candidate:
+            return DuplicateDecisionResult(
+                decision=DuplicateDecision.REVIEW,
+                score=best_score,
+                existing_track_id=str(metadata_candidate.get("track_id", "") or ""),
+                reason="name_duration_match_needs_review",
             )
 
         return DuplicateDecisionResult(

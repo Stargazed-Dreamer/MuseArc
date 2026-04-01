@@ -1,13 +1,78 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 
+from musearc.core.hashing import sha1_text
 from musearc.services.importer import ImportService
 from musearc.services.library_ops import LibraryOpsService
 
 FAVORITES_PLAYLIST_ID = "pl_favorites"
+
+_TIMESTAMP_RE = re.compile(r"\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]")
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _merge_lyrics_text(primary_text: str, secondary_text: str) -> str:
+    def _collect(text: str) -> tuple[list[tuple[int, int, str, str]], list[str]]:
+        timed: list[tuple[int, int, str, str]] = []
+        untimed: list[str] = []
+        order = 0
+        for raw in str(text or "").splitlines():
+            line = str(raw or "").rstrip("\r\n")
+            if not line.strip():
+                continue
+            stamps = list(_TIMESTAMP_RE.finditer(line))
+            if not stamps:
+                untimed.append(line.strip())
+                continue
+            content = _TIMESTAMP_RE.sub("", line).strip()
+            for match in stamps:
+                mm = int(match.group(1))
+                ss = int(match.group(2))
+                frac_raw = str(match.group(3) or "0")
+                frac = int((frac_raw + "00")[:2])
+                centisec = mm * 6000 + ss * 100 + frac
+                tag = f"[{mm:02d}:{ss:02d}.{frac:02d}]"
+                timed.append((centisec, order, tag, content))
+                order += 1
+        return timed, untimed
+
+    timed_primary, untimed_primary = _collect(primary_text)
+    timed_secondary, untimed_secondary = _collect(secondary_text)
+
+    merged_timed: dict[int, tuple[int, str, str]] = {}
+    for centisec, order, tag, content in timed_primary:
+        merged_timed[centisec] = (order, tag, content)
+    for centisec, order, tag, content in timed_secondary:
+        existing = merged_timed.get(centisec)
+        if existing is None:
+            merged_timed[centisec] = (10_000 + order, tag, content)
+            continue
+        old_order, old_tag, old_content = existing
+        if content and content not in old_content.split(" | "):
+            joined = f"{old_content} | {content}" if old_content else content
+            merged_timed[centisec] = (old_order, old_tag, joined)
+
+    merged_lines: list[str] = []
+    for centisec, payload in sorted(merged_timed.items(), key=lambda item: (item[0], item[1][0])):
+        _order, tag, content = payload
+        merged_lines.append(f"{tag}{content}".rstrip())
+
+    seen_untimed: set[str] = set()
+    for line in [*untimed_primary, *untimed_secondary]:
+        text = str(line or "").strip()
+        if not text or text in seen_untimed:
+            continue
+        seen_untimed.add(text)
+        merged_lines.append(text)
+    return "\n".join(merged_lines).strip()
 
 class FacadeLibraryMixin:
     """Facade mixin: library/review/playlist/tag/lyrics workflows."""
@@ -235,6 +300,32 @@ class FacadeLibraryMixin:
         lyrics_ids = [str(i.get("item_id", "")) for i in items if str(i.get("item_type", "")) == "lyrics" and i.get("item_id")]
         track_count = self.purge_deleted_track_files(track_ids) if track_ids else 0
         lyrics_count = self.purge_deleted_lyrics_files(lyrics_ids) if lyrics_ids else 0
+        return {"tracks": track_count, "lyrics": lyrics_count, "total": track_count + lyrics_count}
+
+    def delete_deleted_items_metadata(self, items: list[dict]) -> dict:
+        """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1adelete_deleted_items_metadata\u3002"""
+        track_ids = [str(i.get("item_id", "")) for i in items if str(i.get("item_type", "")) == "track" and i.get("item_id")]
+        lyrics_ids = [str(i.get("item_id", "")) for i in items if str(i.get("item_type", "")) == "lyrics" and i.get("item_id")]
+        track_count = 0
+        lyrics_count = 0
+        with self.ctx.db.session() as conn:
+            if track_ids:
+                placeholders = ",".join("?" for _ in track_ids)
+                cursor = conn.execute(
+                    f"DELETE FROM tracks WHERE track_id IN ({placeholders}) AND deleted_at IS NOT NULL",
+                    tuple(track_ids),
+                )
+                track_count = int(cursor.rowcount or 0)
+            if lyrics_ids:
+                placeholders = ",".join("?" for _ in lyrics_ids)
+                cursor = conn.execute(
+                    f"DELETE FROM lyrics WHERE lyrics_id IN ({placeholders}) AND deleted_at IS NOT NULL",
+                    tuple(lyrics_ids),
+                )
+                lyrics_count = int(cursor.rowcount or 0)
+        if track_count > 0 or lyrics_count > 0:
+            self._redo_actions.clear()
+            self._log(f"delete_deleted_items_metadata tracks={track_count} lyrics={lyrics_count}")
         return {"tracks": track_count, "lyrics": lyrics_count, "total": track_count + lyrics_count}
 
     def update_tracks_fields(self, track_ids: list[str], fields: dict[str, object]) -> int:
@@ -539,6 +630,226 @@ class FacadeLibraryMixin:
             )
         self._redo_actions.clear()
         self._log(f"set_primary_track_for_lyrics lyrics={lyrics_id} track={track_id}")
+
+    def merge_lyrics_for_review(
+        self,
+        primary_lyrics_id: str,
+        secondary_lyrics_id: str,
+        *,
+        resolve_review_ids: list[str] | None = None,
+    ) -> dict:
+        """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1amerge_lyrics_for_review\u3002"""
+        primary_id = str(primary_lyrics_id or "").strip()
+        secondary_id = str(secondary_lyrics_id or "").strip()
+        if not primary_id or not secondary_id or primary_id == secondary_id:
+            raise ValueError("invalid_lyrics_merge_target")
+
+        review_ids = [str(v).strip() for v in (resolve_review_ids or []) if str(v).strip()]
+
+        with self.ctx.db.session() as conn:
+            from musearc.infra.db.repositories import LibraryRepository
+
+            repo = LibraryRepository(conn)
+            rows = repo.get_lyrics_by_ids([primary_id, secondary_id])
+            by_id = {str(r.get("lyrics_id", "")): r for r in rows}
+            primary_row = by_id.get(primary_id)
+            secondary_row = by_id.get(secondary_id)
+            if not primary_row or not secondary_row:
+                raise ValueError("lyrics_not_found")
+
+            primary_rel = str(primary_row.get("storage_relpath", "") or "").strip()
+            secondary_rel = str(secondary_row.get("storage_relpath", "") or "").strip()
+            primary_path = self.ctx.layout.root / primary_rel
+            secondary_path = self.ctx.layout.root / secondary_rel
+            if not primary_rel or not secondary_rel:
+                raise ValueError("lyrics_storage_relpath_missing")
+
+            primary_text = ""
+            secondary_text = ""
+            try:
+                if primary_path.exists():
+                    primary_text = primary_path.read_text(encoding="utf-8")
+            except Exception:
+                primary_text = ""
+            try:
+                if secondary_path.exists():
+                    secondary_text = secondary_path.read_text(encoding="utf-8")
+            except Exception:
+                secondary_text = ""
+
+            merged_text = _merge_lyrics_text(primary_text, secondary_text)
+            if not merged_text:
+                merged_text = (primary_text or secondary_text or "").strip()
+            merged_hash = sha1_text(merged_text)
+            hash_owner = repo.get_lyrics_by_text_hash(merged_hash)
+            if hash_owner and str(hash_owner.get("lyrics_id", "") or "") not in {primary_id, secondary_id}:
+                raise ValueError("lyrics_hash_conflict")
+
+            affected_track_ids = {
+                str(r[0])
+                for r in conn.execute(
+                    "SELECT DISTINCT track_id FROM track_lyrics WHERE lyrics_id IN (?, ?)",
+                    (primary_id, secondary_id),
+                ).fetchall()
+                if str(r[0] or "").strip()
+            }
+            track_links_before: list[dict] = []
+            if affected_track_ids:
+                placeholders = ",".join("?" for _ in affected_track_ids)
+                link_rows = conn.execute(
+                    f"""
+                    SELECT track_id, lyrics_id, confidence, match_method, is_primary, created_at, ext_json
+                    FROM track_lyrics
+                    WHERE track_id IN ({placeholders})
+                    """,
+                    tuple(sorted(affected_track_ids)),
+                ).fetchall()
+                track_links_before = [dict(r) for r in link_rows]
+
+            review_status_before: dict[str, dict] = {}
+            if review_ids:
+                placeholders = ",".join("?" for _ in review_ids)
+                review_rows = conn.execute(
+                    f"SELECT review_id, status, resolved_at FROM review_queue WHERE review_id IN ({placeholders})",
+                    tuple(review_ids),
+                ).fetchall()
+                review_status_before = {
+                    str(r["review_id"]): {"status": str(r["status"] or ""), "resolved_at": r["resolved_at"]}
+                    for r in review_rows
+                }
+
+            line_count = len([line for line in merged_text.splitlines() if str(line or "").strip()])
+            merged_title = str(primary_row.get("lyrics_title", "") or "").strip() or str(secondary_row.get("lyrics_title", "") or "").strip()
+            merged_artist = str(primary_row.get("lyrics_artist", "") or "").strip() or str(secondary_row.get("lyrics_artist", "") or "").strip()
+            merged_album = str(primary_row.get("lyrics_album", "") or "").strip() or str(secondary_row.get("lyrics_album", "") or "").strip()
+            merged_author = str(primary_row.get("lyrics_author", "") or "").strip() or str(secondary_row.get("lyrics_author", "") or "").strip()
+
+            primary_path.parent.mkdir(parents=True, exist_ok=True)
+            primary_path.write_text(merged_text, encoding="utf-8")
+            conn.execute(
+                """
+                UPDATE lyrics
+                SET text_hash = ?, raw_encoding = ?, lyrics_title = ?, lyrics_artist = ?, lyrics_album = ?,
+                    lyrics_author = ?, line_count = ?, deleted_at = NULL
+                WHERE lyrics_id = ?
+                """,
+                (
+                    merged_hash,
+                    "utf-8",
+                    merged_title,
+                    merged_artist,
+                    merged_album,
+                    merged_author,
+                    int(line_count),
+                    primary_id,
+                ),
+            )
+
+            secondary_links = conn.execute(
+                """
+                SELECT track_id, confidence, match_method, is_primary, ext_json
+                FROM track_lyrics
+                WHERE lyrics_id = ?
+                """,
+                (secondary_id,),
+            ).fetchall()
+            now = _utc_now_iso()
+            for link in secondary_links:
+                track_id = str(link["track_id"] or "")
+                if not track_id:
+                    continue
+                is_primary = int(link["is_primary"] or 0)
+                if is_primary:
+                    conn.execute("UPDATE track_lyrics SET is_primary = 0 WHERE track_id = ?", (track_id,))
+                conn.execute(
+                    """
+                    INSERT INTO track_lyrics(track_id, lyrics_id, confidence, match_method, is_primary, created_at, ext_json)
+                    VALUES(?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(track_id, lyrics_id) DO UPDATE SET
+                      confidence = excluded.confidence,
+                      match_method = excluded.match_method,
+                      is_primary = CASE WHEN excluded.is_primary > track_lyrics.is_primary THEN excluded.is_primary ELSE track_lyrics.is_primary END,
+                      created_at = excluded.created_at
+                    """,
+                    (
+                        track_id,
+                        primary_id,
+                        float(link["confidence"] or 0.0),
+                        str(link["match_method"] or "merge"),
+                        1 if is_primary else 0,
+                        now,
+                        str(link["ext_json"] or "{}"),
+                    ),
+                )
+            conn.execute("DELETE FROM track_lyrics WHERE lyrics_id = ?", (secondary_id,))
+            conn.execute("UPDATE lyrics SET deleted_at = ? WHERE lyrics_id = ?", (now, secondary_id))
+
+            if review_ids:
+                repo.set_reviews_status(review_ids, "ignored")
+
+            rows_after = repo.get_lyrics_by_ids([primary_id, secondary_id])
+            by_id_after = {str(r.get("lyrics_id", "")): dict(r) for r in rows_after}
+            track_links_after: list[dict] = []
+            if affected_track_ids:
+                placeholders = ",".join("?" for _ in affected_track_ids)
+                link_rows_after = conn.execute(
+                    f"""
+                    SELECT track_id, lyrics_id, confidence, match_method, is_primary, created_at, ext_json
+                    FROM track_lyrics
+                    WHERE track_id IN ({placeholders})
+                    """,
+                    tuple(sorted(affected_track_ids)),
+                ).fetchall()
+                track_links_after = [dict(r) for r in link_rows_after]
+
+            review_status_after: dict[str, dict] = {}
+            if review_ids:
+                placeholders = ",".join("?" for _ in review_ids)
+                review_rows_after = conn.execute(
+                    f"SELECT review_id, status, resolved_at FROM review_queue WHERE review_id IN ({placeholders})",
+                    tuple(review_ids),
+                ).fetchall()
+                review_status_after = {
+                    str(r["review_id"]): {"status": str(r["status"] or ""), "resolved_at": r["resolved_at"]}
+                    for r in review_rows_after
+                }
+
+            self._append_undo(
+                repo,
+                "merge_lyrics_for_review",
+                {
+                    "primary_lyrics_id": primary_id,
+                    "secondary_lyrics_id": secondary_id,
+                    "primary_storage_relpath": primary_rel,
+                    "secondary_storage_relpath": secondary_rel,
+                    "before": {
+                        "primary_row": dict(primary_row),
+                        "secondary_row": dict(secondary_row),
+                        "primary_text": primary_text,
+                        "secondary_text": secondary_text,
+                        "track_links": track_links_before,
+                        "review_status": review_status_before,
+                    },
+                    "after": {
+                        "primary_row": by_id_after.get(primary_id, {}),
+                        "secondary_row": by_id_after.get(secondary_id, {}),
+                        "primary_text": merged_text,
+                        "secondary_text": secondary_text,
+                        "track_links": track_links_after,
+                        "review_status": review_status_after,
+                    },
+                },
+            )
+
+        self._redo_actions.clear()
+        self._log(f"merge_lyrics_for_review primary={primary_id} secondary={secondary_id}")
+        return {
+            "primary_lyrics_id": primary_id,
+            "secondary_lyrics_id": secondary_id,
+            "line_count": int(line_count),
+            "merged_text_hash": merged_hash,
+            "resolved_reviews": len(review_ids),
+        }
 
     def update_lyrics_author(self, lyrics_ids: list[str], author: str) -> int:
         """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1aupdate_lyrics_author\u3002"""
