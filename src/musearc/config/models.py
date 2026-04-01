@@ -6,8 +6,10 @@ from pydantic import BaseModel, Field
 
 
 class ImportThresholds(BaseModel):
-    duplicate_high: float = 0.96
-    duplicate_review: float = 0.88
+    duplicate_high: float = 0.50
+    duplicate_review: float = 0.30
+    duplicate_instrumental_hint: float = 0.10
+    duplicate_cover_hint: float = 0.01
     lyrics_match_accept: float = 0.82
     lyrics_match_review: float = 0.60
     min_track_duration_sec: float = 45.0
@@ -36,6 +38,7 @@ class UiConfig(BaseModel):
     lyrics_match_workers: int = 0
     lyrics_match_parallel_threshold: int = 96
     general_worker_limit: int = 0
+    fullscan_fp_compare_processes: int = 0
 
 
 class RuntimeConfig(BaseModel):
@@ -43,7 +46,7 @@ class RuntimeConfig(BaseModel):
     thresholds: ImportThresholds = Field(default_factory=ImportThresholds)
     lmstudio: LmStudioConfig = Field(default_factory=LmStudioConfig)
     ui: UiConfig = Field(default_factory=UiConfig)
-    fingerprint_profile_version: int = 2
+    fingerprint_profile_version: int = 3
 
 
 class LibraryLayout(BaseModel):

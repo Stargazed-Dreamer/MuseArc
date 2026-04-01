@@ -55,10 +55,10 @@ def load_runtime_config() -> RuntimeConfig:
 
     cfg = RuntimeConfig.model_validate(payload)
 
-    # Config migration: reset duplicate thresholds when switching to fingerprint profile v2.
-    if int(payload.get("fingerprint_profile_version", 1)) < 2:
+    # Config migration: reset duplicate thresholds when switching similarity profile.
+    if int(payload.get("fingerprint_profile_version", 1)) < 3:
         cfg.thresholds = ImportThresholds()
-        cfg.fingerprint_profile_version = 2
+        cfg.fingerprint_profile_version = 3
         save_runtime_config(cfg)
 
     return cfg

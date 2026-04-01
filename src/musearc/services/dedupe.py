@@ -50,6 +50,23 @@ class DuplicateEvaluator:
         new_source_ext: str | None = None,
         candidates: list[dict],
     ) -> DuplicateDecisionResult:
+        def _norm_threshold(value: float | int | None, fallback: float) -> float:
+            try:
+                return max(0.0, min(1.0, float(value)))
+            except Exception:
+                return fallback
+
+        same_min = _norm_threshold(getattr(self.thresholds, "duplicate_high", 0.50), 0.50)
+        review_min = _norm_threshold(getattr(self.thresholds, "duplicate_review", 0.30), 0.30)
+        instrumental_min = _norm_threshold(getattr(self.thresholds, "duplicate_instrumental_hint", 0.10), 0.10)
+        cover_min = _norm_threshold(getattr(self.thresholds, "duplicate_cover_hint", 0.01), 0.01)
+        if review_min > same_min:
+            review_min = same_min
+        if instrumental_min > review_min:
+            instrumental_min = review_min
+        if cover_min > instrumental_min:
+            cover_min = instrumental_min
+
         def _name_base(value: str) -> str:
             text = re.sub(r"[\(\[【{（].*?[\)\]】}）]", " ", str(value or ""))
             return normalize_text(text)
@@ -170,7 +187,7 @@ class DuplicateEvaluator:
         new_kind = infer_track_kind(new_title)
         existing_kind = infer_track_kind(existing_title)
 
-        if best_score >= self.thresholds.duplicate_high:
+        if best_score >= same_min:
             if new_kind != existing_kind and {new_kind, existing_kind} != {TrackKind.UNKNOWN}:
                 return DuplicateDecisionResult(
                     decision=DuplicateDecision.KEEP_BOTH,
@@ -226,12 +243,12 @@ class DuplicateEvaluator:
                 reason="near_identical_duplicate",
             )
 
-        if best_score >= self.thresholds.duplicate_review:
+        if best_score >= review_min:
             return DuplicateDecisionResult(
                 decision=DuplicateDecision.REVIEW,
                 score=best_score,
                 existing_track_id=best_candidate["track_id"],
-                reason="possible_duplicate_needs_review",
+                reason="same_song_similarity_review_band",
             )
 
         if metadata_candidate:
@@ -242,9 +259,24 @@ class DuplicateEvaluator:
                 reason="name_duration_match_needs_review",
             )
 
+        if best_score >= instrumental_min:
+            return DuplicateDecisionResult(
+                decision=DuplicateDecision.KEEP_BOTH,
+                score=best_score,
+                existing_track_id=best_candidate["track_id"],
+                reason="likely_instrumental_or_original",
+            )
+        if best_score >= cover_min:
+            return DuplicateDecisionResult(
+                decision=DuplicateDecision.KEEP_BOTH,
+                score=best_score,
+                existing_track_id=best_candidate["track_id"],
+                reason="likely_cover_version",
+            )
+
         return DuplicateDecisionResult(
             decision=DuplicateDecision.KEEP_BOTH,
             score=best_score,
             existing_track_id=best_candidate["track_id"],
-            reason="similar_but_not_duplicate",
+            reason="different_song_low_similarity",
         )

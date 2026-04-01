@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
@@ -283,6 +285,18 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
         self._lyrics_row_controls: dict[str, dict] = {}
         self._lyrics_review_order: list[dict] = []
         self._lyrics_map_dialog_open = False
+        self._review_filter_options: dict[str, list[str]] = {
+            "song": [],
+            "lyrics": [],
+            "file": [],
+            "other": [],
+        }
+        self._review_filter_selected: dict[str, set[str]] = {
+            "song": set(),
+            "lyrics": set(),
+            "file": set(),
+            "other": set(),
+        }
 
         root = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -322,6 +336,13 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
 
     def _build_song_tab(self) -> None:
         root = QVBoxLayout(self.song_tab)
+        row_top = QHBoxLayout()
+        self.btn_song_filter = QPushButton("筛选问题")
+        self.lbl_song_filter = QLabel("")
+        self._register_static_button(self.btn_song_filter)
+        row_top.addWidget(self.btn_song_filter)
+        row_top.addWidget(self.lbl_song_filter)
+        row_top.addStretch(1)
         self.song_scroll = QScrollArea()
         self.song_scroll.setWidgetResizable(True)
         self.song_groups_host = QWidget()
@@ -330,10 +351,19 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
         self.song_groups_layout.setSpacing(12)
         self.song_groups_layout.addStretch(1)
         self.song_scroll.setWidget(self.song_groups_host)
+        root.addLayout(row_top)
         root.addWidget(self.song_scroll, 1)
+        self.btn_song_filter.clicked.connect(lambda: self._open_review_filter_dialog("song"))
 
     def _build_lyrics_tab(self) -> None:
         root = QVBoxLayout(self.lyrics_tab)
+        row_top = QHBoxLayout()
+        self.btn_lyrics_filter = QPushButton("筛选问题")
+        self.lbl_lyrics_filter = QLabel("")
+        self._register_static_button(self.btn_lyrics_filter)
+        row_top.addWidget(self.btn_lyrics_filter)
+        row_top.addWidget(self.lbl_lyrics_filter)
+        row_top.addStretch(1)
         split = QSplitter(Qt.Orientation.Horizontal)
         self.lyrics_scroll = QScrollArea()
         self.lyrics_scroll.setWidgetResizable(True)
@@ -361,7 +391,9 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
         split.addWidget(preview_host)
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 1)
+        root.addLayout(row_top)
         root.addWidget(split, 1)
+        self.btn_lyrics_filter.clicked.connect(lambda: self._open_review_filter_dialog("lyrics"))
 
         self.preview_left.verticalScrollBar().valueChanged.connect(
             lambda v: self._sync_preview_scrollbars(from_left=True, value=v)
@@ -373,14 +405,19 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
     def _build_file_tab(self) -> None:
         root = QVBoxLayout(self.file_tab)
         row = QHBoxLayout()
+        self.btn_file_filter = QPushButton("筛选问题")
         self.btn_file_invert = QPushButton("反选")
         self.btn_file_retry = QPushButton("重试导入选中路径")
         self.btn_file_save = QPushButton("保存勾选的文件")
         self.btn_file_ignore = QPushButton("忽略勾选")
+        self.lbl_file_filter = QLabel("")
+        self._register_static_button(self.btn_file_filter)
         self._register_static_button(self.btn_file_invert)
         self._register_static_button(self.btn_file_retry)
         self._register_static_button(self.btn_file_save)
         self._register_static_button(self.btn_file_ignore)
+        row.addWidget(self.btn_file_filter)
+        row.addWidget(self.lbl_file_filter)
         row.addWidget(self.btn_file_invert)
         row.addWidget(self.btn_file_retry)
         row.addWidget(self.btn_file_save)
@@ -400,16 +437,22 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
         self.btn_file_retry.clicked.connect(self._retry_selected_file_issues)
         self.btn_file_save.clicked.connect(lambda: self._resolve_checked_items(self.file_tree, "resolved"))
         self.btn_file_ignore.clicked.connect(lambda: self._resolve_checked_items(self.file_tree, "ignored"))
+        self.btn_file_filter.clicked.connect(lambda: self._open_review_filter_dialog("file"))
 
     def _build_other_tab(self) -> None:
         root = QVBoxLayout(self.other_tab)
         row = QHBoxLayout()
+        self.btn_other_filter = QPushButton("筛选问题")
         self.btn_other_invert = QPushButton("反选")
         self.btn_other_save = QPushButton("保存勾选的文件")
         self.btn_other_ignore = QPushButton("忽略勾选")
+        self.lbl_other_filter = QLabel("")
+        self._register_static_button(self.btn_other_filter)
         self._register_static_button(self.btn_other_invert)
         self._register_static_button(self.btn_other_save)
         self._register_static_button(self.btn_other_ignore)
+        row.addWidget(self.btn_other_filter)
+        row.addWidget(self.lbl_other_filter)
         row.addWidget(self.btn_other_invert)
         row.addWidget(self.btn_other_save)
         row.addWidget(self.btn_other_ignore)
@@ -427,6 +470,7 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
         self.btn_other_invert.clicked.connect(lambda: self._invert_check_state_tree(self.other_tree))
         self.btn_other_save.clicked.connect(lambda: self._resolve_checked_items(self.other_tree, "resolved"))
         self.btn_other_ignore.clicked.connect(lambda: self._resolve_checked_items(self.other_tree, "ignored"))
+        self.btn_other_filter.clicked.connect(lambda: self._open_review_filter_dialog("other"))
 
     def apply_button_scale(self, scale: float) -> None:
         self._button_scale = max(1.0, float(scale))
@@ -440,6 +484,104 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
         self.reload_reviews()
 
     def refresh_page(self) -> None:
+        self.reload_reviews()
+
+    @staticmethod
+    def _issue_type_of(row: dict) -> str:
+        text = str((row or {}).get("issue_type", "") or "").strip()
+        return text or "(未分类)"
+
+    def _update_filter_options(self, scope: str, rows: list[dict]) -> None:
+        options = sorted({self._issue_type_of(r) for r in rows}, key=lambda s: s.casefold())
+        self._review_filter_options[scope] = options
+        selected = set(self._review_filter_selected.get(scope, set()))
+        if not selected:
+            self._review_filter_selected[scope] = set(options)
+            return
+        self._review_filter_selected[scope] = {v for v in selected if v in options}
+        if not self._review_filter_selected[scope] and options:
+            self._review_filter_selected[scope] = set(options)
+
+    def _apply_filter_scope(self, scope: str, rows: list[dict]) -> list[dict]:
+        selected = set(self._review_filter_selected.get(scope, set()))
+        if not rows:
+            return []
+        if not selected:
+            return list(rows)
+        return [r for r in rows if self._issue_type_of(r) in selected]
+
+    def _refresh_filter_labels(self) -> None:
+        mapping = {
+            "song": getattr(self, "lbl_song_filter", None),
+            "lyrics": getattr(self, "lbl_lyrics_filter", None),
+            "file": getattr(self, "lbl_file_filter", None),
+            "other": getattr(self, "lbl_other_filter", None),
+        }
+        for scope, label in mapping.items():
+            if not isinstance(label, QLabel):
+                continue
+            options = self._review_filter_options.get(scope, [])
+            selected = self._review_filter_selected.get(scope, set())
+            if not options:
+                label.setText("无可筛选项")
+                continue
+            if not selected or len(selected) >= len(options):
+                label.setText(f"全部({len(options)})")
+            else:
+                label.setText(f"已选 {len(selected)}/{len(options)}")
+
+    def _open_review_filter_dialog(self, scope: str) -> None:
+        options = list(self._review_filter_options.get(scope, []))
+        if not options:
+            QMessageBox.information(self, "筛选问题", "当前页没有可筛选的问题类型。")
+            return
+
+        selected = set(self._review_filter_selected.get(scope, set())) or set(options)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("筛选问题类型")
+        root = QVBoxLayout(dialog)
+        root.addWidget(QLabel("勾选要显示的问题类型："))
+
+        list_widget = QListWidget()
+        list_widget.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        for option in options:
+            item = QListWidgetItem(option)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if option in selected else Qt.CheckState.Unchecked)
+            list_widget.addItem(item)
+        root.addWidget(list_widget, 1)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btn_all = btns.addButton("全选", QDialogButtonBox.ButtonRole.ActionRole)
+        btn_none = btns.addButton("全不选", QDialogButtonBox.ButtonRole.ActionRole)
+        root.addWidget(btns)
+
+        def _set_all(checked: bool) -> None:
+            state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+            for idx in range(list_widget.count()):
+                it = list_widget.item(idx)
+                if it is not None:
+                    it.setCheckState(state)
+
+        btn_all.clicked.connect(lambda: _set_all(True))
+        btn_none.clicked.connect(lambda: _set_all(False))
+        btns.accepted.connect(dialog.accept)
+        btns.rejected.connect(dialog.reject)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_selected: set[str] = set()
+        for idx in range(list_widget.count()):
+            it = list_widget.item(idx)
+            if it is None:
+                continue
+            if it.checkState() == Qt.CheckState.Checked:
+                new_selected.add(it.text())
+        if not new_selected:
+            QMessageBox.information(self, "筛选问题", "至少勾选一个问题类型。")
+            return
+        self._review_filter_selected[scope] = new_selected
         self.reload_reviews()
 
     def reload_reviews(self) -> None:
@@ -483,6 +625,7 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                 song_rows.append(
                     {
                         "review_id": review_id,
+                        "issue_type": review_title or "疑似重复",
                         "group_key": str(payload.get("group_key") or existing_track_id[:8] or Path(source_path).stem or "未分组"),
                         "group_title": _derive_song_group_title(
                             str(payload.get("group_key") or existing_track_id[:8] or ""),
@@ -510,6 +653,7 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                 "fingerprint_failed",
                 "loudness_normalization_unavailable",
             }:
+                issue_title = str(row.get("title", "") or "文件异常")
                 source_path = str(payload.get("path", "") or "")
                 source_file = Path(source_path).name
                 title_hint = str(payload.get("title_hint", "") or "")
@@ -536,6 +680,7 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                         song_rows.append(
                             {
                                 "review_id": review_id,
+                                "issue_type": issue_title,
                                 "group_key": group_key,
                                 "group_title": _derive_song_group_title(group_key, source_path),
                                 "source_file": source_file,
@@ -554,6 +699,7 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                     song_rows.append(
                         {
                             "review_id": review_id,
+                            "issue_type": issue_title,
                             "group_key": group_key,
                             "group_title": _derive_song_group_title(group_key, source_path),
                             "source_file": source_file,
@@ -587,6 +733,7 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                 lyrics_rows_out.append(
                     {
                         "review_id": review_id,
+                        "issue_type": review_title or "歌词匹配待审查",
                         "group_key": str(payload.get("lyrics_group_key") or payload.get("group_key") or Path(source_rel).stem or "未分组"),
                         "group_title": _derive_lyrics_group_title(
                             str(payload.get("lyrics_group_title") or payload.get("lyrics_group_key") or payload.get("group_key") or ""),
@@ -615,6 +762,7 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                 file_rows.append(
                     {
                         "review_id": review_id,
+                        "issue_type": str(row.get("title", "") or "文件异常"),
                         "title": str(row.get("title", "") or ""),
                         "path": str(payload.get("path", "") or ""),
                         "detail": str(payload.get("error", "") or payload.get("duration_sec", "") or "").replace("原因", ""),
@@ -625,17 +773,29 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
             other_rows.append(
                 {
                     "review_id": review_id,
+                    "issue_type": str(row.get("title", "") or kind or "其它"),
                     "kind": kind,
                     "title": str(row.get("title", "") or ""),
                     "payload": str(payload),
                 }
             )
 
+        self._update_filter_options("song", song_rows)
+        self._update_filter_options("lyrics", lyrics_rows_out)
+        self._update_filter_options("file", file_rows)
+        self._update_filter_options("other", other_rows)
+
+        song_rows_filtered = self._apply_filter_scope("song", song_rows)
+        lyrics_rows_filtered = self._apply_filter_scope("lyrics", lyrics_rows_out)
+        file_rows_filtered = self._apply_filter_scope("file", file_rows)
+        other_rows_filtered = self._apply_filter_scope("other", other_rows)
+        self._refresh_filter_labels()
+
         self._dynamic_buttons.clear()
-        self._fill_song_tree(song_rows)
-        self._fill_lyrics_tree(lyrics_rows_out)
-        self._fill_file_tree(file_rows)
-        self._fill_other_tree(other_rows)
+        self._fill_song_tree(song_rows_filtered)
+        self._fill_lyrics_tree(lyrics_rows_filtered)
+        self._fill_file_tree(file_rows_filtered)
+        self._fill_other_tree(other_rows_filtered)
         self.apply_button_scale(self._button_scale)
 
     def _style_group_header(self, item: QTreeWidgetItem) -> None:

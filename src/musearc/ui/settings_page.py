@@ -58,6 +58,8 @@ class SettingsPage(QWidget):
         self.spin_lyrics_threshold.setRange(1, 5000)
         self.spin_general_workers = QSpinBox()
         self.spin_general_workers.setRange(0, 64)
+        self.spin_fullscan_fp_processes = QSpinBox()
+        self.spin_fullscan_fp_processes.setRange(0, 32)
 
         self.combo_delete_mode = QComboBox()
         self.combo_delete_mode.addItem("绑定歌词一起移动到回收站", "move_linked_lyrics")
@@ -88,6 +90,7 @@ class SettingsPage(QWidget):
         form.addRow("歌词比对线程(0=自动)", self.spin_lyrics_workers)
         form.addRow("歌词并发阈值(候选数)", self.spin_lyrics_threshold)
         form.addRow("通用线程上限(0=自动)", self.spin_general_workers)
+        form.addRow("全量筛选指纹比对进程(0=自动)", self.spin_fullscan_fp_processes)
         form.addRow("删除歌曲默认行为", self.combo_delete_mode)
         form.addRow("默认播放方式", self.combo_player_mode)
         form.addRow("外部播放器路径", player_row)
@@ -123,6 +126,7 @@ class SettingsPage(QWidget):
         self.spin_lyrics_workers.setValue(int(getattr(cfg.ui, "lyrics_match_workers", 0)))
         self.spin_lyrics_threshold.setValue(int(getattr(cfg.ui, "lyrics_match_parallel_threshold", 96)))
         self.spin_general_workers.setValue(int(getattr(cfg.ui, "general_worker_limit", 0)))
+        self.spin_fullscan_fp_processes.setValue(int(getattr(cfg.ui, "fullscan_fp_compare_processes", 0)))
 
         idx = self.combo_delete_mode.findData(str(cfg.ui.delete_tracks_mode_default or "move_linked_lyrics"))
         self.combo_delete_mode.setCurrentIndex(max(0, idx))
@@ -150,6 +154,7 @@ class SettingsPage(QWidget):
         cfg.ui.lyrics_match_workers = int(self.spin_lyrics_workers.value())
         cfg.ui.lyrics_match_parallel_threshold = int(self.spin_lyrics_threshold.value())
         cfg.ui.general_worker_limit = int(self.spin_general_workers.value())
+        cfg.ui.fullscan_fp_compare_processes = int(self.spin_fullscan_fp_processes.value())
         cfg.ui.delete_tracks_mode_default = str(self.combo_delete_mode.currentData())
         cfg.ui.player_mode = str(self.combo_player_mode.currentData())
         cfg.ui.external_player_path = str(self.input_player_path.text().strip())

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import time
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from typing import Callable
 
 from pathlib import Path
@@ -13,6 +15,37 @@ from musearc.services.importer import _derive_title_artist, _is_unknown_text
 from musearc.services.library_ops import LibraryOpsService
 
 FAVORITES_PLAYLIST_ID = "pl_favorites"
+_RUNTIME_FP_ENGINE = None
+
+
+def _runtime_worker_fp_engine():
+    global _RUNTIME_FP_ENGINE
+    if _RUNTIME_FP_ENGINE is None:
+        from musearc.infra.media.fingerprint import AcousticFingerprintEngine
+
+        _RUNTIME_FP_ENGINE = AcousticFingerprintEngine()
+    return _RUNTIME_FP_ENGINE
+
+
+def _runtime_compare_row_in_process(
+    payload_a: str,
+    len_a: int,
+    lower: float,
+    upper: float,
+    candidates: list[tuple[str, str, int]],
+) -> str | None:
+    """Process worker: return first matched candidate track_id for one row."""
+    engine = _runtime_worker_fp_engine()
+    allowed_len_delta = max(16, int(len_a or 0) // 3)
+    for cand_tid, payload_b, len_b in candidates:
+        if not cand_tid or not payload_b:
+            continue
+        if abs(int(len_b or 0) - int(len_a or 0)) > allowed_len_delta:
+            continue
+        score = float(engine.similarity(str(payload_a or ""), str(payload_b or "")))
+        if float(lower) <= score <= float(upper):
+            return str(cand_tid)
+    return None
 
 class FacadeRuntimeMixin:
     """Facade mixin: runtime/fullscan/undo-redo workflows."""
@@ -121,12 +154,25 @@ class FacadeRuntimeMixin:
 
         return self._create_fullscan_work_from_track_ids(self._next_fullscan_work_name(base_name), sorted(picked))
 
+    def _resolve_fullscan_fp_process_count(self) -> int:
+        cfg = getattr(self.ctx.runtime_config, "ui", None)
+        requested = int(getattr(cfg, "fullscan_fp_compare_processes", 0) or 0)
+        general_limit = int(getattr(cfg, "general_worker_limit", 0) or 0)
+        cpu = max(1, int(os.cpu_count() or 4))
+        if requested <= 0:
+            workers = max(1, min(8, cpu - 1))
+        else:
+            workers = max(1, min(32, requested, cpu))
+        if general_limit > 0:
+            workers = max(1, min(workers, int(general_limit)))
+        return workers
+
     def create_fullscan_work_fingerprint_similar(
         self,
         *,
         min_score: float,
         max_score: float,
-        base_name: str = "指纹高相似歌曲",
+        base_name: str = "fingerprint_similar_tracks",
         progress_callback: Callable[[int, int, str], None] | None = None,
         is_cancelled: Callable[[], bool] | None = None,
     ) -> str:
@@ -142,17 +188,25 @@ class FacadeRuntimeMixin:
         fp = AcousticFingerprintEngine()
         if not fp.chromaprint_available:
             if callable(progress_callback):
-                progress_callback(100, 100, "Chromaprint不可用，无法执行指纹相似筛选")
-            raise RuntimeError("Chromaprint 不可用，请先配置 libchromaprint 后再执行指纹相似筛选。")
+                progress_callback(100, 100, "chromaprint unavailable")
+            raise RuntimeError("Chromaprint unavailable, configure libchromaprint first.")
+
         if callable(progress_callback):
-            progress_callback(1, 100, "读取歌曲列表")
+            progress_callback(1, 100, "loading tracks")
         raw_rows = self.list_tracks(limit=2_000_000)
         if callable(progress_callback):
-            progress_callback(5, 100, "筛选可比对歌曲")
+            progress_callback(5, 100, "filtering comparable tracks")
+
         if lower <= 0.0 and upper >= 0.999:
-            all_ids = sorted({str(row.get("track_id", "") or "") for row in raw_rows if str(row.get("track_id", "") or "").strip()})
+            all_ids = sorted(
+                {
+                    str(row.get("track_id", "") or "")
+                    for row in raw_rows
+                    if str(row.get("track_id", "") or "").strip()
+                }
+            )
             if callable(progress_callback):
-                progress_callback(100, 100, "创建工作")
+                progress_callback(100, 100, "creating work")
             return self._create_fullscan_work_from_track_ids(self._next_fullscan_work_name(base_name), all_ids)
 
         rows: list[dict] = []
@@ -172,23 +226,21 @@ class FacadeRuntimeMixin:
                 toks.append(text[pos : pos + win])
                 if len(toks) >= 48:
                     break
-            # keep order + dedupe
             return tuple(dict.fromkeys(t for t in toks if t))
 
         for row in raw_rows:
+            if callable(is_cancelled) and is_cancelled():
+                return ""
             payload = str(row.get("fingerprint_payload", "") or "").strip()
             track_id = str(row.get("track_id", "") or "").strip()
             if not payload or not track_id:
                 continue
-            if callable(is_cancelled) and is_cancelled():
-                return ""
             try:
                 sec = int(round(float(row.get("duration_sec", 0.0) or 0.0)))
             except Exception:
                 sec = 0
-            if payload in fp_hash_cache:
-                hash32 = fp_hash_cache.get(payload)
-            else:
+            hash32 = fp_hash_cache.get(payload)
+            if payload not in fp_hash_cache:
                 hash32 = fp.fingerprint_hash32(payload)
                 fp_hash_cache[payload] = hash32
             rows.append(
@@ -212,7 +264,8 @@ class FacadeRuntimeMixin:
         for idx, row in enumerate(rows, 1):
             if callable(is_cancelled) and is_cancelled():
                 return ""
-            by_duration.setdefault(int(row.get("sec", 0) or 0), []).append(row)
+            sec = int(row.get("sec", 0) or 0)
+            by_duration.setdefault(sec, []).append(row)
             tid = str(row.get("track_id", "") or "")
             if tid:
                 row_by_id[tid] = row
@@ -220,7 +273,7 @@ class FacadeRuntimeMixin:
                     token_index.setdefault(str(tok), []).append(tid)
             if callable(progress_callback) and (idx == bucket_total or idx % bucket_step == 0):
                 pct = 5 + int(15 * idx / bucket_total)
-                progress_callback(pct, 100, "建立时长分桶")
+                progress_callback(pct, 100, "build duration buckets")
 
         picked: set[str] = set()
         total_rows = max(1, len(rows))
@@ -230,10 +283,17 @@ class FacadeRuntimeMixin:
             max_compare_candidates = 64
         else:
             max_compare_candidates = 96
+
+        process_workers = self._resolve_fullscan_fp_process_count()
+        enable_process_parallel = process_workers > 1 and len(rows) >= max(256, process_workers * 48)
+
         pair_score_cache: dict[tuple[str, str], float] = {}
+        parallel_jobs: list[tuple[str, str, int, list[tuple[str, str, int]]]] = []
         processed = 0
+        prepared = 0
         last_emit_ts = 0.0
         progress_mark = 20
+
         for sec, bucket in by_duration.items():
             if callable(is_cancelled) and is_cancelled():
                 return ""
@@ -250,6 +310,8 @@ class FacadeRuntimeMixin:
                 len_a = int(row.get("plen", 0) or 0)
                 hash_a = row.get("hash32")
                 tokens_a = tuple(row.get("tokens", ()) or ())
+                prepared += 1
+
                 if not tid_a or not payload_a:
                     processed += 1
                     continue
@@ -282,12 +344,11 @@ class FacadeRuntimeMixin:
                             abs(int(row_by_id.get(tid, {}).get("plen", 0) or 0) - len_a),
                         ),
                     )
-                    for cand_tid in ordered_ids[: max_compare_candidates]:
+                    for cand_tid in ordered_ids[:max_compare_candidates]:
                         cand_row = row_by_id.get(cand_tid)
                         if cand_row:
                             candidate_pool.append(cand_row)
                 else:
-                    # Fallback to duration-only candidates when token index has no hit.
                     duration_pool: list[dict] = []
                     for cand in candidates:
                         cand_tid = str(cand.get("track_id", "") or "")
@@ -298,10 +359,8 @@ class FacadeRuntimeMixin:
                             continue
                         duration_pool.append(cand)
                     duration_pool.sort(key=lambda c: abs(int(c.get("plen", 0) or 0) - len_a))
-                    candidate_pool = duration_pool[: max_compare_candidates]
+                    candidate_pool = duration_pool[:max_compare_candidates]
 
-                # Cheap prefilter: keep nearby Chromaprint hash candidates first,
-                # then run expensive pairwise similarity only on a bounded subset.
                 if candidate_pool and isinstance(hash_a, int):
                     ranked: list[tuple[int, dict]] = []
                     no_hash: list[dict] = []
@@ -328,7 +387,7 @@ class FacadeRuntimeMixin:
                             min_keep = 10
                         selected = [cand for hd, cand in ranked if hd <= hd_limit][:keep_n]
                         if len(selected) < min(min_keep, len(ranked)):
-                            selected = [cand for _, cand in ranked[: max(min_keep, min(keep_n, len(ranked)))]]
+                            selected = [cand for _, cand in ranked[:max(min_keep, min(keep_n, len(ranked)))]]
                         if no_hash:
                             selected_ids = {str(c.get("track_id", "") or "") for c in selected}
                             for cand in no_hash[:4]:
@@ -338,6 +397,33 @@ class FacadeRuntimeMixin:
                                     selected_ids.add(tid)
                         candidate_pool = selected
 
+                if not candidate_pool:
+                    processed += 1
+                    if callable(progress_callback):
+                        row_ratio = float(processed) / float(total_rows)
+                        pct = 20 + int(75.0 * max(0.0, min(1.0, row_ratio)))
+                        progress_mark = max(progress_mark, pct)
+                        progress_callback(max(20, min(95, progress_mark)), 100, "compare fingerprints")
+                    continue
+
+                if enable_process_parallel:
+                    serialized_candidates: list[tuple[str, str, int]] = []
+                    for cand in candidate_pool:
+                        cand_tid = str(cand.get("track_id", "") or "")
+                        payload_b = str(cand.get("payload", "") or "")
+                        len_b = int(cand.get("plen", 0) or 0)
+                        if cand_tid and payload_b:
+                            serialized_candidates.append((cand_tid, payload_b, len_b))
+                    if serialized_candidates:
+                        parallel_jobs.append((tid_a, payload_a, len_a, serialized_candidates))
+                    else:
+                        processed += 1
+                    if callable(progress_callback) and (prepared == total_rows or prepared % 32 == 0):
+                        prep_ratio = float(prepared) / float(total_rows)
+                        prep_pct = 20 + int(20.0 * max(0.0, min(1.0, prep_ratio)))
+                        progress_callback(max(20, min(45, prep_pct)), 100, "prepare parallel jobs")
+                    continue
+
                 matched_tid: str | None = None
                 cand_total = max(1, len(candidate_pool))
                 for cand_idx, cand in enumerate(candidate_pool, 1):
@@ -345,12 +431,10 @@ class FacadeRuntimeMixin:
                         return ""
                     payload_b = str(cand.get("payload", "") or "")
                     len_b = int(cand.get("plen", 0) or 0)
-                    if not payload_b:
+                    tid_b = str(cand.get("track_id", "") or "")
+                    if not payload_b or not tid_b:
                         continue
                     if abs(len_b - len_a) > allowed_len_delta:
-                        continue
-                    tid_b = str(cand.get("track_id", "") or "")
-                    if not tid_b:
                         continue
                     key = (tid_a, tid_b) if tid_a < tid_b else (tid_b, tid_a)
                     score = pair_score_cache.get(key)
@@ -360,19 +444,14 @@ class FacadeRuntimeMixin:
                     if lower <= score <= upper:
                         matched_tid = tid_b
                         break
-
-                    if cand_idx % 16 == 0:
-                        # Yield GIL periodically, otherwise long pure-Python loops can starve UI event loop.
+                    if cand_idx % 8 == 0:
                         time.sleep(0)
                     now = time.monotonic()
-                    if callable(progress_callback) and (cand_idx % 64 == 0 or (now - last_emit_ts) >= 0.25):
+                    if callable(progress_callback) and (now - last_emit_ts) >= 0.25:
                         row_ratio = (float(processed) + (float(cand_idx) / float(cand_total))) / float(total_rows)
-                        global_pct = 20 + int(75.0 * max(0.0, min(1.0, row_ratio)))
-                        within_row = min(3, int(4.0 * float(cand_idx) / float(cand_total)))
-                        pct = global_pct + within_row
+                        pct = 20 + int(75.0 * max(0.0, min(1.0, row_ratio)))
                         progress_mark = max(progress_mark, pct)
-                        msg = f"计算指纹相似度（{processed + 1}/{total_rows}，候选 {cand_idx}/{cand_total}）"
-                        progress_callback(max(20, min(95, progress_mark)), 100, msg)
+                        progress_callback(max(20, min(95, progress_mark)), 100, "compare fingerprints")
                         last_emit_ts = now
 
                 if matched_tid:
@@ -383,10 +462,84 @@ class FacadeRuntimeMixin:
                     row_ratio = float(processed) / float(total_rows)
                     pct = 20 + int(75.0 * max(0.0, min(1.0, row_ratio)))
                     progress_mark = max(progress_mark, pct)
-                    progress_callback(max(20, min(95, progress_mark)), 100, "计算指纹相似度")
+                    progress_callback(max(20, min(95, progress_mark)), 100, "compare fingerprints")
+
+        if enable_process_parallel and parallel_jobs:
+            total_jobs = len(parallel_jobs)
+            completed_jobs = 0
+            submitted = 0
+            max_inflight = max(4, process_workers * 2)
+            inflight: dict = {}
+            pool: ProcessPoolExecutor | None = None
+            try:
+                pool = ProcessPoolExecutor(max_workers=process_workers)
+
+                def _submit_more() -> None:
+                    nonlocal submitted
+                    while submitted < total_jobs and len(inflight) < max_inflight:
+                        tid_a, payload_a, len_a, candidates = parallel_jobs[submitted]
+                        fut = pool.submit(
+                            _runtime_compare_row_in_process,
+                            payload_a,
+                            len_a,
+                            lower,
+                            upper,
+                            candidates,
+                        )
+                        inflight[fut] = tid_a
+                        submitted += 1
+
+                _submit_more()
+                while inflight:
+                    if callable(is_cancelled) and is_cancelled():
+                        pool.shutdown(wait=False, cancel_futures=True)
+                        return ""
+                    done, _ = wait(tuple(inflight.keys()), timeout=0.25, return_when=FIRST_COMPLETED)
+                    if not done:
+                        if callable(progress_callback):
+                            ratio = float(processed) / float(total_rows)
+                            pct = 40 + int(55.0 * max(0.0, min(1.0, ratio)))
+                            progress_callback(max(40, min(95, pct)), 100, f"parallel compare workers={process_workers}")
+                        continue
+                    for fut in done:
+                        tid_a = str(inflight.pop(fut) or "")
+                        matched_tid = None
+                        try:
+                            matched_tid = fut.result()
+                        except Exception:
+                            matched_tid = None
+                        if tid_a and matched_tid:
+                            picked.add(tid_a)
+                            picked.add(str(matched_tid))
+                        processed += 1
+                        completed_jobs += 1
+                        if callable(progress_callback):
+                            ratio = float(processed) / float(total_rows)
+                            pct = 40 + int(55.0 * max(0.0, min(1.0, ratio)))
+                            progress_callback(max(40, min(95, pct)), 100, f"parallel compare {completed_jobs}/{total_jobs}")
+                    _submit_more()
+            except Exception:
+                for tid_a, payload_a, len_a, candidates in parallel_jobs:
+                    if callable(is_cancelled) and is_cancelled():
+                        return ""
+                    matched_tid = _runtime_compare_row_in_process(payload_a, len_a, lower, upper, candidates)
+                    if tid_a and matched_tid:
+                        picked.add(tid_a)
+                        picked.add(str(matched_tid))
+                    processed += 1
+                    if callable(progress_callback):
+                        ratio = float(processed) / float(total_rows)
+                        pct = 40 + int(55.0 * max(0.0, min(1.0, ratio)))
+                        progress_callback(max(40, min(95, pct)), 100, "fallback single-process compare")
+            finally:
+                if pool is not None:
+                    try:
+                        pool.shutdown(wait=False, cancel_futures=False)
+                    except Exception:
+                        pass
 
         if callable(progress_callback):
-            progress_callback(98, 100, "创建工作")
+            progress_callback(98, 100, "creating work")
         return self._create_fullscan_work_from_track_ids(self._next_fullscan_work_name(base_name), sorted(picked))
 
     def _create_fullscan_work_from_track_ids(self, name: str, track_ids: list[str]) -> str:

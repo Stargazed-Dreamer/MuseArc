@@ -176,3 +176,19 @@
    - `docs/import_pipeline_cn.md`
    - `docs/import_pipeline.md`
 4. 单文件超过约 1k 行优先按业务域拆分，不引入过度碎片化模块。
+
+## 9. 指纹分段策略（2026-04）
+
+重复识别采用分段阈值：
+
+- `score >= 0.50`：同一歌曲区间，执行自动保留/替换决策。
+- `0.30 <= score < 0.50`：审查区间，进入 `review_queue`。
+- `0.10 <= score < 0.30`：原版/伴奏提示区间，默认保留并建立 `instrumental_variant_hint` 关系。
+- `0.01 <= score < 0.10`：翻唱提示区间，默认保留并建立 `cover_version_hint` 关系。
+- `score < 0.01`：低相关区间，默认视为不同歌曲。
+
+代码入口：
+
+- 判定逻辑：`src/musearc/services/dedupe.py::DuplicateEvaluator.decide`
+- 关系落库：`src/musearc/services/importer_pipeline.py`（`repo.add_variant(...)`）
+- 默认阈值：`src/musearc/config/models.py::ImportThresholds`

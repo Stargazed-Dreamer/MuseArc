@@ -247,25 +247,37 @@ def run_import_path(
     if state.created_track_ids:
         prior = repo.get_tracks_by_ids(state.created_track_ids)
         for item in prior:
+            source_relpath = str(item.get("source_relpath") or "").replace("\\", "/")
+            source_dir_key = str(Path(source_relpath).parent).replace("\\", "/").strip().casefold()
+            if source_dir_key in {"", "."}:
+                source_dir_key = ""
             batch_track_records.append(
                 {
                     "track_id": item.get("track_id"),
                     "title": item.get("title", ""),
                     "artist": item.get("artist", ""),
                     "album": item.get("album", ""),
-                    "source_stem": Path(item.get("source_relpath") or "").stem,
+                    "source_stem": Path(source_relpath).stem,
+                    "source_relpath": source_relpath,
+                    "source_dir_key": source_dir_key,
                     "storage_relpath": item.get("storage_relpath", ""),
                 }
             )
     library_track_records: list[dict] = []
     for item in repo.list_tracks(limit=2_000_000):
+        source_relpath = str(item.get("source_relpath") or "").replace("\\", "/")
+        source_dir_key = str(Path(source_relpath).parent).replace("\\", "/").strip().casefold()
+        if source_dir_key in {"", "."}:
+            source_dir_key = ""
         library_track_records.append(
             {
                 "track_id": item.get("track_id"),
                 "title": item.get("title", ""),
                 "artist": item.get("artist", ""),
                 "album": item.get("album", ""),
-                "source_stem": Path(item.get("source_relpath") or "").stem,
+                "source_stem": Path(source_relpath).stem,
+                "source_relpath": source_relpath,
+                "source_dir_key": source_dir_key,
                 "storage_relpath": item.get("storage_relpath", ""),
             }
         )
@@ -298,6 +310,41 @@ def run_import_path(
         _consume(fallback)
         picked.sort(key=lambda r: float(r.get("score", 0.0)), reverse=True)
         return picked[:limit]
+
+    def _dir_key_from_relpath(relpath_text: str) -> str:
+        text = str(relpath_text or "").replace("\\", "/").strip()
+        if not text:
+            return ""
+        parent = str(Path(text).parent).replace("\\", "/").strip().casefold()
+        if parent in {"", "."}:
+            return ""
+        return parent
+
+    def _merge_track_records(*groups: list[dict]) -> list[dict]:
+        merged: list[dict] = []
+        seen: set[str] = set()
+        for group in groups:
+            for item in group:
+                if not isinstance(item, dict):
+                    continue
+                tid = str(item.get("track_id", "") or "").strip()
+                if not tid or tid in seen:
+                    continue
+                seen.add(tid)
+                merged.append(item)
+        return merged
+
+    def _split_track_records_by_dir(records: list[dict], folder_key: str) -> tuple[list[dict], list[dict]]:
+        same: list[dict] = []
+        other: list[dict] = []
+        key = str(folder_key or "").strip().casefold()
+        for item in records:
+            source_dir = str(item.get("source_dir_key", "") or "").strip().casefold()
+            if source_dir == key:
+                same.append(item)
+            else:
+                other.append(item)
+        return same, other
 
     lyrics_review_groups: list[dict] = []
 
@@ -643,16 +690,31 @@ def run_import_path(
                     "artist": artist,
                     "album": repair_metadata_text(probe.album or ""),
                     "source_stem": candidate.path.stem,
+                    "source_relpath": relpath,
+                    "source_dir_key": str(Path(relpath).parent).replace("\\", "/").strip().casefold()
+                    if str(Path(relpath).parent).replace("\\", "/").strip() not in {"", "."}
+                    else "",
                     "storage_relpath": storage_rel,
                 }
             )
 
-            if decision.existing_track_id and decision.score >= service.runtime_cfg.thresholds.duplicate_review:
+            should_add_variant = False
+            relation_type = "similar_version"
+            if decision.existing_track_id:
+                if decision.score >= service.runtime_cfg.thresholds.duplicate_review:
+                    should_add_variant = True
+                elif decision.reason == "likely_instrumental_or_original":
+                    should_add_variant = True
+                    relation_type = "instrumental_variant_hint"
+                elif decision.reason == "likely_cover_version":
+                    should_add_variant = True
+                    relation_type = "cover_version_hint"
+            if should_add_variant:
                 repo.add_variant(
                     variant_id=new_id("var"),
                     primary_track_id=decision.existing_track_id,
                     variant_track_id=track_id,
-                    relation_type="similar_version",
+                    relation_type=relation_type,
                     similarity_score=decision.score,
                     reason=decision.reason,
                 )
@@ -833,6 +895,10 @@ def run_import_path(
         if relpath in processed_relpaths:
             continue
         relpath_key = relpath.casefold()
+        lyrics_dir_key = _dir_key_from_relpath(relpath)
+        lyrics_dir_display = str(Path(relpath).parent).replace("\\", "/").strip()
+        if lyrics_dir_display in {"", "."}:
+            lyrics_dir_display = "(root)"
         lyrics_source_key = _normalize_source_path_key(candidate.path)
         if lyrics_source_key in seen_lyrics_path_keys:
             set_skipped(relpath, "歌词源路径命中历史记录")
@@ -873,7 +939,9 @@ def run_import_path(
 
         if _is_placeholder_empty_lyrics(text):
             try:
-                placeholder_match = service.lyrics_matcher.match_one(candidate.stem_normalized, text, batch_track_records)
+                same_batch, _other_batch = _split_track_records_by_dir(batch_track_records, lyrics_dir_key)
+                placeholder_pool = same_batch if same_batch else batch_track_records
+                placeholder_match = service.lyrics_matcher.match_one(candidate.stem_normalized, text, placeholder_pool)
                 if placeholder_match.track_id and float(placeholder_match.score or 0.0) >= 0.65:
                     repo.update_tracks_fields([str(placeholder_match.track_id)], {"language_kind": "instrumental"})
             except Exception:
@@ -968,54 +1036,92 @@ def run_import_path(
         set_processing(relpath, "歌词匹配")
         emit("lyrics_match", relpath)
         try:
-            match = service.lyrics_matcher.match_one(candidate.stem_normalized, text, batch_track_records)
-            if (not match.track_id or match.needs_review) and library_track_records:
-                fallback_match = service.lyrics_matcher.match_one(candidate.stem_normalized, text, library_track_records)
-                if fallback_match.track_id and (
-                    not match.track_id or float(fallback_match.score or 0.0) >= float(match.score or 0.0)
-                ):
-                    match = fallback_match
-            if match.track_id and not match.needs_review:
+            batch_same, batch_other = _split_track_records_by_dir(batch_track_records, lyrics_dir_key)
+            library_same, library_other = _split_track_records_by_dir(library_track_records, lyrics_dir_key)
+            same_folder_pool = _merge_track_records(batch_same, library_same)
+            cross_folder_pool = _merge_track_records(batch_other, library_other)
+            cross_folder_track_map = {
+                str(item.get("track_id", "") or ""): item
+                for item in cross_folder_pool
+                if str(item.get("track_id", "") or "").strip()
+            }
+
+            # Folder-first policy:
+            # 1) only evaluate same-folder candidates first
+            # 2) evaluate cross-folder candidates only when same-folder has no track hit
+            match = service.lyrics_matcher.match_one(candidate.stem_normalized, text, same_folder_pool)
+            match_origin = "same_folder"
+            if (not match.track_id) and cross_folder_pool:
+                cross_match = service.lyrics_matcher.match_one(candidate.stem_normalized, text, cross_folder_pool)
+                if cross_match.track_id:
+                    match = cross_match
+                    match_origin = "cross_folder"
+
+            folder_mismatch = bool(match.track_id and match_origin == "cross_folder")
+            target_dir_display = ""
+            if folder_mismatch:
+                target_track = cross_folder_track_map.get(str(match.track_id), {})
+                target_source_rel = str(target_track.get("source_relpath", "") or "").replace("\\", "/").strip()
+                target_dir_display = str(Path(target_source_rel).parent).replace("\\", "/").strip()
+                if target_dir_display in {"", "."}:
+                    target_dir_display = "(root)"
+
+            if match.track_id and not match.needs_review and not folder_mismatch:
                 repo.link_lyrics(
                     track_id=match.track_id,
                     lyrics_id=lyrics_id,
                     confidence=match.score,
-                    match_method=match.reason,
+                    match_method=f"same_folder:{match.reason}",
                 )
                 state.matched_lyrics += 1
                 set_archived(relpath)
             else:
                 state.review_items += 1
                 lyrics_group_key, lyrics_group_title = resolve_lyrics_group_key(relpath, text)
+                review_reason = str(match.reason or "").strip() or "no_match"
+                discard_reason = "match_confidence_low"
+                if folder_mismatch:
+                    review_reason = (
+                        f"{review_reason}; 目标歌曲文件夹不对应 "
+                        f"(lyrics={lyrics_dir_display}, track={target_dir_display})"
+                    )
+                    discard_reason = "目标歌曲文件夹不对应"
                 lyrics_suggestions = build_lyrics_suggestions(
                     candidate.path.stem,
-                    preferred=batch_track_records,
-                    fallback=library_track_records,
+                    preferred=same_folder_pool,
+                    fallback=cross_folder_pool,
                     limit=6,
                 )
                 service._enqueue_review(
                     repo,
                     ReviewItem(
                         kind=ReviewKind.LYRICS_MATCH,
-                        title="歌词匹配待人工审查",
+                        title=(
+                            "歌词匹配待人工审查"
+                            if not folder_mismatch
+                            else "歌词跨目录匹配待审查"
+                        ),
                         payload={
                             "lyrics_source": relpath,
                             "lyrics_id": lyrics_id,
                             "suggest_track_id": match.track_id,
                             "score": match.score,
-                            "reason": match.reason,
-                            "discard_reason": "匹配置信度不足",
+                            "reason": review_reason,
+                            "discard_reason": discard_reason,
                             "lyrics_preview": text.splitlines()[:10],
                             "title_hint": candidate.path.stem,
                             "suggest_candidates": lyrics_suggestions,
                             "group_key": lyrics_suggestions[0].get("track_id") if lyrics_suggestions else lyrics_group_key,
                             "lyrics_group_key": lyrics_group_key,
                             "lyrics_group_title": lyrics_group_title,
+                            "folder_mismatch": folder_mismatch,
+                            "lyrics_dir": lyrics_dir_display if folder_mismatch else "",
+                            "track_dir": target_dir_display if folder_mismatch else "",
                         },
                         priority=2,
                     ),
                 )
-                if match.track_id:
+                if match.track_id and not folder_mismatch:
                     repo.link_lyrics(
                         track_id=match.track_id,
                         lyrics_id=lyrics_id,
@@ -1023,8 +1129,12 @@ def run_import_path(
                         match_method=f"review:{match.reason}",
                         is_primary=False,
                     )
-                set_review(relpath, "歌词匹配待人工审查")
+                set_review(
+                    relpath,
+                    "歌词匹配待人工审查" if not folder_mismatch else "目标歌曲文件夹不对应",
+                )
                 pending_lyrics_relpath_keys.add(relpath_key)
+
         except Exception as exc:
             state.errors.append(f"lyrics_match_failed:{candidate.path}:{exc}")
             state.review_items += 1
