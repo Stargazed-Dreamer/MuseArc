@@ -754,8 +754,43 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                         "source_mtime": source_mtime,
                         "preview": "\n".join(payload.get("lyrics_preview") or []),
                         "restore_lyrics_id": str(payload.get("lyrics_id", "") or "") if review_title == "已删除歌词重新导入" else "",
+                        "readonly_reference": False,
                     }
                 )
+                existing_lyrics_id = str(payload.get("existing_lyrics_id", "") or "").strip()
+                if existing_lyrics_id:
+                    existing_source = str(payload.get("existing_lyrics_source", "") or "").replace("\\", "/")
+                    existing_preview_lines = payload.get("existing_lyrics_preview") or []
+                    if not isinstance(existing_preview_lines, list):
+                        existing_preview_lines = []
+                    existing_similarity = _safe_float(payload.get("existing_lyrics_similarity", 0.0), 0.0)
+                    lyrics_rows_out.append(
+                        {
+                            "review_id": "",
+                            "issue_type": "库内歌词参考",
+                            "group_key": str(payload.get("lyrics_group_key") or payload.get("group_key") or Path(source_rel).stem or "未分组"),
+                            "group_title": _derive_lyrics_group_title(
+                                str(payload.get("lyrics_group_title") or payload.get("lyrics_group_key") or payload.get("group_key") or ""),
+                                existing_source,
+                            ),
+                            "lyrics_source": existing_source,
+                            "lyrics_file": Path(existing_source).name if existing_source else f"{existing_lyrics_id}.lrc",
+                            "lyrics_id": existing_lyrics_id,
+                            "lyrics_title": "",
+                            "lyrics_artist": "",
+                            "storage_relpath": "",
+                            "suggest_track": "",
+                            "suggest_track_id": "",
+                            "score": existing_similarity,
+                            "reason": "库内已存在歌词（参考）",
+                            "line_count": 0,
+                            "imported_at": "",
+                            "source_mtime": 0.0,
+                            "preview": "\n".join(str(v or "") for v in existing_preview_lines),
+                            "restore_lyrics_id": "",
+                            "readonly_reference": True,
+                        }
+                    )
                 continue
 
             if kind == "file_issue":

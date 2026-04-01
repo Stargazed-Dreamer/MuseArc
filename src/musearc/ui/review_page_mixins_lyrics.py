@@ -197,6 +197,10 @@ class ReviewPageLyricsMixin:
         checkbox = QCheckBox()
         checkbox.setChecked(False)
         checkbox.setStyleSheet("QCheckBox::indicator{width:28px;height:28px;}")
+        is_readonly_reference = bool(payload.get("readonly_reference", False))
+        if is_readonly_reference:
+            checkbox.setChecked(True)
+            checkbox.setEnabled(False)
         btn_reveal = QPushButton("📁")
         btn_reveal.setFixedWidth(34)
         lbl_file = _ClickableLabel(str(payload.get("lyrics_file", "") or ""))
@@ -225,7 +229,7 @@ class ReviewPageLyricsMixin:
         bind_layout.setContentsMargins(34, 0, 0, 0)
         bind_layout.setSpacing(6)
         bind_icon = QLabel("🔗")
-        bind_text = QLabel("点击绑定数据库歌曲")
+        bind_text = QLabel("点击绑定数据库歌曲" if not is_readonly_reference else "库内歌词参考（只读）")
         bind_text.setStyleSheet("color:#5d6f86;")
         bind_icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         bind_text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -269,9 +273,11 @@ class ReviewPageLyricsMixin:
         checkbox.clicked.connect(lambda _checked=False: _preview())
         top.clicked.connect(_preview)
         btn_reveal.clicked.connect(lambda _=False, p=dict(payload): self._reveal_lyrics_file(p))
-        link_bind_row.clicked.connect(_edit_mapping)
+        if not is_readonly_reference:
+            link_bind_row.clicked.connect(_edit_mapping)
         if link_suggest_row is not None:
-            link_suggest_row.clicked.connect(_edit_mapping)
+            if not is_readonly_reference:
+                link_suggest_row.clicked.connect(_edit_mapping)
         return row_ctrl
 
     def _reveal_lyrics_file(self, row: dict) -> None:
@@ -347,13 +353,18 @@ class ReviewPageLyricsMixin:
         """\u6309\u7b56\u7565\u8bbe\u7f6e\u6b4c\u8bcd\u7ec4\u9ed8\u8ba4\u52fe\u9009\u9879\u3002"""
         if not rows or not row_controls:
             return
-        for row_ctrl in row_controls:
+        effective: list[tuple[dict, dict]] = []
+        for row, row_ctrl in zip(rows, row_controls):
             checkbox = row_ctrl.get("checkbox")
-            if isinstance(checkbox, QCheckBox):
+            if isinstance(checkbox, QCheckBox) and checkbox.isEnabled():
                 checkbox.setChecked(False)
+                effective.append((row, row_ctrl))
+        if not effective:
+            return
 
-        pairs = list(zip(rows, row_controls))
-        if self._lyrics_group_same_file(rows):
+        pairs = list(effective)
+        rows_eff = [r for r, _ctrl in pairs]
+        if self._lyrics_group_same_file(rows_eff):
             target = max(
                 pairs,
                 key=lambda p: (
@@ -532,7 +543,7 @@ class ReviewPageLyricsMixin:
         entries = group.get("rows") if isinstance(group, dict) else []
         for row_ctrl in entries if isinstance(entries, list) else []:
             checkbox = row_ctrl.get("checkbox") if isinstance(row_ctrl, dict) else None
-            if isinstance(checkbox, QCheckBox):
+            if isinstance(checkbox, QCheckBox) and checkbox.isEnabled():
                 checkbox.setChecked(True)
 
     def _invert_lyrics_group(self, group: dict) -> None:
@@ -540,7 +551,7 @@ class ReviewPageLyricsMixin:
         entries = group.get("rows") if isinstance(group, dict) else []
         for row_ctrl in entries if isinstance(entries, list) else []:
             checkbox = row_ctrl.get("checkbox") if isinstance(row_ctrl, dict) else None
-            if isinstance(checkbox, QCheckBox):
+            if isinstance(checkbox, QCheckBox) and checkbox.isEnabled():
                 checkbox.setChecked(not checkbox.isChecked())
 
     def _merge_preview_lyrics_for_group(self, group: dict) -> None:

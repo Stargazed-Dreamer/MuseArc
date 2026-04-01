@@ -346,6 +346,80 @@ def run_import_path(
                 other.append(item)
         return same, other
 
+    def _norm_name(value: str) -> str:
+        return _normalize_name_for_compare(str(value or ""))
+
+    def _find_best_exact_title_match(
+        tracks: list[dict],
+        *,
+        title_hint: str,
+        artist_hint: str,
+    ) -> dict | None:
+        title_norm = _norm_name(title_hint)
+        if not title_norm:
+            return None
+        artist_norm = _norm_name(artist_hint)
+        matched: list[tuple[tuple[int, int, str], dict]] = []
+        for track in tracks:
+            track_title_norm = _norm_name(track.get("title", ""))
+            if track_title_norm != title_norm:
+                continue
+            track_artist_norm = _norm_name(track.get("artist", ""))
+            same_artist = 1 if artist_norm and track_artist_norm == artist_norm else 0
+            artist_non_empty = 1 if track_artist_norm else 0
+            matched.append(((same_artist, artist_non_empty, str(track.get("track_id", "") or "")), track))
+        if not matched:
+            return None
+        matched.sort(key=lambda item: item[0], reverse=True)
+        return dict(matched[0][1])
+
+    def _find_best_filename_match(
+        tracks: list[dict],
+        *,
+        filename_hint: str,
+        artist_hint: str,
+    ) -> dict | None:
+        stem_norm = _norm_name(filename_hint)
+        if not stem_norm:
+            return None
+        artist_norm = _norm_name(artist_hint)
+        matched: list[tuple[tuple[int, int, str], dict]] = []
+        for track in tracks:
+            track_stem_norm = _norm_name(track.get("source_stem", ""))
+            if track_stem_norm != stem_norm:
+                continue
+            track_artist_norm = _norm_name(track.get("artist", ""))
+            same_artist = 1 if artist_norm and track_artist_norm == artist_norm else 0
+            artist_non_empty = 1 if track_artist_norm else 0
+            matched.append(((same_artist, artist_non_empty, str(track.get("track_id", "") or "")), track))
+        if not matched:
+            return None
+        matched.sort(key=lambda item: item[0], reverse=True)
+        return dict(matched[0][1])
+
+    def _lyrics_text_similarity(left_text: str, right_text: str) -> float:
+        left_lines = [normalize_text(line) for line in lrc_visible_lines(left_text, max_lines=2000)]
+        right_lines = [normalize_text(line) for line in lrc_visible_lines(right_text, max_lines=2000)]
+        left_norm = "\n".join(line for line in left_lines if line).strip()
+        right_norm = "\n".join(line for line in right_lines if line).strip()
+        if not left_norm or not right_norm:
+            return 0.0
+        if left_norm == right_norm:
+            return 1.0
+        return difflib.SequenceMatcher(None, left_norm, right_norm).ratio()
+
+    def _read_library_lyrics_text(storage_relpath: str) -> str:
+        rel = str(storage_relpath or "").strip()
+        if not rel:
+            return ""
+        target = service.library_root / rel
+        if not target.exists():
+            return ""
+        try:
+            return target.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return ""
+
     lyrics_review_groups: list[dict] = []
 
     def resolve_lyrics_group_key(relpath: str, lyrics_text: str) -> tuple[str, str]:
@@ -954,6 +1028,8 @@ def run_import_path(
         text_hash = sha1_text(text)
         lyrics_author, line_count, lyrics_title, lyrics_artist, lyrics_album = _extract_lyrics_meta(text)
         lyrics_language_kind = _infer_lyrics_language_kind(text)
+        lyrics_abs: Path | None = None
+        lyrics_rel = ""
         existing_lyrics = repo.get_lyrics_by_text_hash(text_hash)
         if existing_lyrics and existing_lyrics.get("deleted_at"):
             state.review_items += 1
@@ -1040,100 +1116,215 @@ def run_import_path(
             library_same, library_other = _split_track_records_by_dir(library_track_records, lyrics_dir_key)
             same_folder_pool = _merge_track_records(batch_same, library_same)
             cross_folder_pool = _merge_track_records(batch_other, library_other)
-            cross_folder_track_map = {
-                str(item.get("track_id", "") or ""): item
-                for item in cross_folder_pool
-                if str(item.get("track_id", "") or "").strip()
-            }
-
-            # Folder-first policy:
-            # 1) only evaluate same-folder candidates first
-            # 2) evaluate cross-folder candidates only when same-folder has no track hit
-            match = service.lyrics_matcher.match_one(candidate.stem_normalized, text, same_folder_pool)
-            match_origin = "same_folder"
-            if (not match.track_id) and cross_folder_pool:
-                cross_match = service.lyrics_matcher.match_one(candidate.stem_normalized, text, cross_folder_pool)
-                if cross_match.track_id:
-                    match = cross_match
-                    match_origin = "cross_folder"
-
-            folder_mismatch = bool(match.track_id and match_origin == "cross_folder")
-            target_dir_display = ""
-            if folder_mismatch:
-                target_track = cross_folder_track_map.get(str(match.track_id), {})
-                target_source_rel = str(target_track.get("source_relpath", "") or "").replace("\\", "/").strip()
-                target_dir_display = str(Path(target_source_rel).parent).replace("\\", "/").strip()
-                if target_dir_display in {"", "."}:
-                    target_dir_display = "(root)"
-
-            if match.track_id and not match.needs_review and not folder_mismatch:
-                repo.link_lyrics(
-                    track_id=match.track_id,
-                    lyrics_id=lyrics_id,
-                    confidence=match.score,
-                    match_method=f"same_folder:{match.reason}",
+            def _match_rules(pool: list[dict], *, scope: str) -> dict | None:
+                # 1) 优先用歌词 ti 元数据匹配歌曲 title，命中即作为强匹配
+                track = _find_best_exact_title_match(
+                    pool,
+                    title_hint=lyrics_title,
+                    artist_hint=lyrics_artist,
                 )
-                state.matched_lyrics += 1
-                set_archived(relpath)
-            else:
+                if track:
+                    return {
+                        "track": track,
+                        "scope": scope,
+                        "method": "ti_title",
+                        "score": 1.0,
+                        "reason": "ti->title 精确匹配",
+                        "needs_review": False,
+                    }
+
+                # 2) ti 未命中后：文件名->文件名；再尝试 歌词标题->文件名
+                track = _find_best_filename_match(
+                    pool,
+                    filename_hint=candidate.path.stem,
+                    artist_hint=lyrics_artist,
+                )
+                if track:
+                    return {
+                        "track": track,
+                        "scope": scope,
+                        "method": "filename_to_filename",
+                        "score": 0.72,
+                        "reason": "文件名匹配不精确需要检查",
+                        "needs_review": True,
+                    }
+                track = _find_best_filename_match(
+                    pool,
+                    filename_hint=lyrics_title,
+                    artist_hint=lyrics_artist,
+                )
+                if track:
+                    return {
+                        "track": track,
+                        "scope": scope,
+                        "method": "lyrics_title_to_filename",
+                        "score": 0.70,
+                        "reason": "文件名匹配不精确需要检查",
+                        "needs_review": True,
+                    }
+                return None
+
+            match_result = _match_rules(same_folder_pool, scope="same_folder")
+            if match_result is None and cross_folder_pool:
+                match_result = _match_rules(cross_folder_pool, scope="cross_folder")
+
+            lyrics_group_key, lyrics_group_title = resolve_lyrics_group_key(relpath, text)
+            lyrics_suggestions = build_lyrics_suggestions(
+                candidate.path.stem,
+                preferred=same_folder_pool,
+                fallback=cross_folder_pool,
+                limit=6,
+            )
+
+            if match_result is None:
                 state.review_items += 1
-                lyrics_group_key, lyrics_group_title = resolve_lyrics_group_key(relpath, text)
-                review_reason = str(match.reason or "").strip() or "no_match"
-                discard_reason = "match_confidence_low"
-                if folder_mismatch:
-                    review_reason = (
-                        f"{review_reason}; 目标歌曲文件夹不对应 "
-                        f"(lyrics={lyrics_dir_display}, track={target_dir_display})"
-                    )
-                    discard_reason = "目标歌曲文件夹不对应"
-                lyrics_suggestions = build_lyrics_suggestions(
-                    candidate.path.stem,
-                    preferred=same_folder_pool,
-                    fallback=cross_folder_pool,
-                    limit=6,
-                )
                 service._enqueue_review(
                     repo,
                     ReviewItem(
                         kind=ReviewKind.LYRICS_MATCH,
-                        title=(
-                            "歌词匹配待人工审查"
-                            if not folder_mismatch
-                            else "歌词跨目录匹配待审查"
-                        ),
+                        title="歌词匹配待人工审查",
                         payload={
                             "lyrics_source": relpath,
                             "lyrics_id": lyrics_id,
-                            "suggest_track_id": match.track_id,
-                            "score": match.score,
-                            "reason": review_reason,
-                            "discard_reason": discard_reason,
+                            "suggest_track_id": "",
+                            "score": 0.0,
+                            "reason": "无匹配歌曲",
+                            "discard_reason": "无匹配歌曲",
                             "lyrics_preview": text.splitlines()[:10],
                             "title_hint": candidate.path.stem,
                             "suggest_candidates": lyrics_suggestions,
-                            "group_key": lyrics_suggestions[0].get("track_id") if lyrics_suggestions else lyrics_group_key,
+                            "group_key": lyrics_group_key,
                             "lyrics_group_key": lyrics_group_key,
                             "lyrics_group_title": lyrics_group_title,
-                            "folder_mismatch": folder_mismatch,
-                            "lyrics_dir": lyrics_dir_display if folder_mismatch else "",
-                            "track_dir": target_dir_display if folder_mismatch else "",
+                            "folder_mismatch": False,
+                            "lyrics_dir": "",
+                            "track_dir": "",
                         },
                         priority=2,
                     ),
                 )
-                if match.track_id and not folder_mismatch:
-                    repo.link_lyrics(
-                        track_id=match.track_id,
-                        lyrics_id=lyrics_id,
-                        confidence=match.score,
-                        match_method=f"review:{match.reason}",
-                        is_primary=False,
-                    )
-                set_review(
-                    relpath,
-                    "歌词匹配待人工审查" if not folder_mismatch else "目标歌曲文件夹不对应",
-                )
+                set_review(relpath, "无匹配歌曲")
                 pending_lyrics_relpath_keys.add(relpath_key)
+            else:
+                track = dict(match_result.get("track") or {})
+                track_id = str(track.get("track_id", "") or "").strip()
+                match_scope = str(match_result.get("scope", "") or "")
+                match_method = str(match_result.get("method", "") or "")
+                match_score = float(match_result.get("score", 0.0) or 0.0)
+                review_reason = str(match_result.get("reason", "") or "歌词匹配待人工审查")
+                needs_review = bool(match_result.get("needs_review", True))
+                folder_mismatch = match_scope == "cross_folder"
+
+                target_source_rel = str(track.get("source_relpath", "") or "").replace("\\", "/").strip()
+                target_dir_display = str(Path(target_source_rel).parent).replace("\\", "/").strip()
+                if target_dir_display in {"", "."}:
+                    target_dir_display = "(root)"
+
+                # 同目录下 ti->title 强匹配直接绑定
+                if track_id and match_method == "ti_title" and not needs_review and not folder_mismatch:
+                    repo.link_lyrics(
+                        track_id=track_id,
+                        lyrics_id=lyrics_id,
+                        confidence=max(0.90, match_score),
+                        match_method="ti_title_exact",
+                    )
+                    state.matched_lyrics += 1
+                    set_archived(relpath)
+                else:
+                    existing_primary = repo.primary_lyrics_for_track(track_id) if track_id else None
+                    existing_lyrics_id = str((existing_primary or {}).get("lyrics_id", "") or "")
+                    existing_lyrics_source = str((existing_primary or {}).get("source_relpath", "") or "").replace("\\", "/")
+                    existing_lyrics_storage = str((existing_primary or {}).get("storage_relpath", "") or "")
+                    existing_lyrics_text = _read_library_lyrics_text(existing_lyrics_storage)
+                    existing_similarity = 0.0
+
+                    # 文件名匹配命中且目标歌曲已有歌词：先比对，相同则跳过，不同则进入冲突审查
+                    if track_id and match_method in {"filename_to_filename", "lyrics_title_to_filename"} and existing_lyrics_id:
+                        existing_similarity = _lyrics_text_similarity(text, existing_lyrics_text)
+                        if existing_similarity >= 0.90:
+                            removed = int(repo.delete_lyrics_by_ids([lyrics_id]) or 0)
+                            if removed > 0:
+                                state.imported_lyrics = max(0, int(state.imported_lyrics) - 1)
+                                try:
+                                    state.created_lyrics_ids.remove(lyrics_id)
+                                except ValueError:
+                                    pass
+                                if lyrics_rel:
+                                    try:
+                                        state.created_storage_relpaths.remove(lyrics_rel)
+                                    except ValueError:
+                                        pass
+                            if lyrics_abs is not None and lyrics_abs.exists():
+                                lyrics_abs.unlink(missing_ok=True)
+                            set_skipped(relpath, "歌曲已有歌词且内容重复")
+                            mark_processed(relpath)
+                            continue
+                        review_reason = "歌曲已有歌词"
+
+                    if folder_mismatch:
+                        review_reason = (
+                            f"{review_reason}; 目标歌曲文件夹不匹配 "
+                            f"(lyrics={lyrics_dir_display}, track={target_dir_display})"
+                        )
+
+                    if track_id and not any(str(r.get("track_id", "") or "") == track_id for r in lyrics_suggestions):
+                        lyrics_suggestions.insert(
+                            0,
+                            {
+                                "track_id": track_id,
+                                "title": str(track.get("title", "") or ""),
+                                "artist": str(track.get("artist", "") or ""),
+                                "score": round(max(match_score, 0.01), 4),
+                            },
+                        )
+                    if len(lyrics_suggestions) > 6:
+                        lyrics_suggestions = lyrics_suggestions[:6]
+
+                    if track_id:
+                        track_name = str(track.get("title", "") or track.get("source_stem", "") or track_id)
+                        lyrics_group_key = f"trk:{track_id}"
+                        lyrics_group_title = track_name
+
+                    state.review_items += 1
+                    service._enqueue_review(
+                        repo,
+                        ReviewItem(
+                            kind=ReviewKind.LYRICS_MATCH,
+                            title="歌词跨目录匹配待审查" if folder_mismatch else "歌词匹配待人工审查",
+                            payload={
+                                "lyrics_source": relpath,
+                                "lyrics_id": lyrics_id,
+                                "suggest_track_id": track_id,
+                                "score": max(match_score, round(existing_similarity, 4)),
+                                "reason": review_reason,
+                                "discard_reason": review_reason,
+                                "lyrics_preview": text.splitlines()[:10],
+                                "title_hint": candidate.path.stem,
+                                "suggest_candidates": lyrics_suggestions,
+                                "group_key": lyrics_group_key,
+                                "lyrics_group_key": lyrics_group_key,
+                                "lyrics_group_title": lyrics_group_title,
+                                "folder_mismatch": folder_mismatch,
+                                "lyrics_dir": lyrics_dir_display if folder_mismatch else "",
+                                "track_dir": target_dir_display if folder_mismatch else "",
+                                "existing_lyrics_id": existing_lyrics_id,
+                                "existing_lyrics_source": existing_lyrics_source,
+                                "existing_lyrics_preview": existing_lyrics_text.splitlines()[:10] if existing_lyrics_text else [],
+                                "existing_lyrics_similarity": round(existing_similarity, 4),
+                            },
+                            priority=2,
+                        ),
+                    )
+                    if track_id and not folder_mismatch:
+                        repo.link_lyrics(
+                            track_id=track_id,
+                            lyrics_id=lyrics_id,
+                            confidence=max(0.35, match_score),
+                            match_method=f"review:{match_method}",
+                            is_primary=False,
+                        )
+                    set_review(relpath, review_reason)
+                    pending_lyrics_relpath_keys.add(relpath_key)
 
         except Exception as exc:
             state.errors.append(f"lyrics_match_failed:{candidate.path}:{exc}")
