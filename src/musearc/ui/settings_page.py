@@ -64,6 +64,9 @@ class SettingsPage(QWidget):
         self.combo_delete_mode = QComboBox()
         self.combo_delete_mode.addItem("绑定歌词一起移动到回收站", "move_linked_lyrics")
         self.combo_delete_mode.addItem("仅删除歌曲并解开映射关系", "unlink_only")
+        self.combo_lyrics_cell_action = QComboBox()
+        self.combo_lyrics_cell_action.addItem("更改歌词绑定", "change_mapping")
+        self.combo_lyrics_cell_action.addItem("跳转到歌词管理", "jump_to_lyrics")
 
         self.combo_player_mode = QComboBox()
         self.combo_player_mode.addItem("内置播放器", "builtin")
@@ -92,6 +95,7 @@ class SettingsPage(QWidget):
         form.addRow("通用线程上限(0=自动)", self.spin_general_workers)
         form.addRow("全量筛选指纹比对进程(0=自动)", self.spin_fullscan_fp_processes)
         form.addRow("删除歌曲默认行为", self.combo_delete_mode)
+        form.addRow("编辑歌词文件名默认动作", self.combo_lyrics_cell_action)
         form.addRow("默认播放方式", self.combo_player_mode)
         form.addRow("外部播放器路径", player_row)
         form.addRow("", self.chk_enable_logs)
@@ -130,6 +134,8 @@ class SettingsPage(QWidget):
 
         idx = self.combo_delete_mode.findData(str(cfg.ui.delete_tracks_mode_default or "move_linked_lyrics"))
         self.combo_delete_mode.setCurrentIndex(max(0, idx))
+        lidx = self.combo_lyrics_cell_action.findData(str(cfg.ui.lyrics_cell_action_default or "change_mapping"))
+        self.combo_lyrics_cell_action.setCurrentIndex(max(0, lidx))
 
         pidx = self.combo_player_mode.findData(str(cfg.ui.player_mode or "external"))
         self.combo_player_mode.setCurrentIndex(max(0, pidx))
@@ -156,6 +162,7 @@ class SettingsPage(QWidget):
         cfg.ui.general_worker_limit = int(self.spin_general_workers.value())
         cfg.ui.fullscan_fp_compare_processes = int(self.spin_fullscan_fp_processes.value())
         cfg.ui.delete_tracks_mode_default = str(self.combo_delete_mode.currentData())
+        cfg.ui.lyrics_cell_action_default = str(self.combo_lyrics_cell_action.currentData())
         cfg.ui.player_mode = str(self.combo_player_mode.currentData())
         cfg.ui.external_player_path = str(self.input_player_path.text().strip())
         cfg.ui.enable_logs = bool(self.chk_enable_logs.isChecked())

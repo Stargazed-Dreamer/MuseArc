@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 from musearc.core.hashing import sha1_text
+from musearc.infra.media.tag_writer import write_basic_metadata_tags
 from musearc.services.importer import ImportService
 from musearc.services.library_ops import LibraryOpsService
 
@@ -156,6 +157,17 @@ class FacadeLibraryMixin:
                 )
                 self._log(f"delete_tracks count={count} mode={delete_mode}")
         return count
+
+    def has_linked_lyrics_for_tracks(self, track_ids: list[str]) -> bool:
+        """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1ahas_linked_lyrics_for_tracks\u3002"""
+        ids = [str(v) for v in track_ids if str(v).strip()]
+        if not ids:
+            return False
+        with self.ctx.db.session() as conn:
+            from musearc.infra.db.repositories import LibraryRepository
+
+            repo = LibraryRepository(conn)
+            return bool(repo.has_linked_lyrics_for_tracks(ids))
 
     def list_deleted_tracks(self, limit: int = 5000, *, include_missing: bool = True) -> list[dict]:
         """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1alist_deleted_tracks\u3002"""
@@ -337,6 +349,26 @@ class FacadeLibraryMixin:
             before = repo.get_tracks_by_ids(track_ids)
             count = LibraryOpsService(repo).update_tracks_fields(track_ids, fields)
             if count > 0:
+                id3_keys = {"title", "artist", "album"}
+                id3_failures: list[str] = []
+                if any(str(k) in id3_keys for k in fields.keys()):
+                    for row in before:
+                        track_id = str(row.get("track_id", "") or "").strip()
+                        rel = str(row.get("storage_relpath", "") or "").strip()
+                        if not track_id or not rel:
+                            continue
+                        target = Path(self.ctx.layout.root) / rel
+                        title = str(fields.get("title", row.get("title", "")) or "")
+                        artist = str(fields.get("artist", row.get("artist", "")) or "")
+                        album = str(fields.get("album", row.get("album", "")) or "")
+                        ok, reason = write_basic_metadata_tags(
+                            target,
+                            title=title,
+                            artist=artist,
+                            album=album,
+                        )
+                        if not ok:
+                            id3_failures.append(f"{track_id}:{reason}")
                 rollback_values = []
                 for row in before:
                     rollback_values.append(
@@ -360,7 +392,21 @@ class FacadeLibraryMixin:
                     },
                 )
                 self._log(f"update_tracks_fields count={count} fields={list(fields.keys())}")
+                if id3_failures:
+                    self._log(f"id3_writeback_failures count={len(id3_failures)} first={id3_failures[0]}", level="warn")
             return count
+
+    def sync_track_language_from_lyrics(self, *, only_unknown: bool = True) -> int:
+        """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1async_track_language_from_lyrics\u3002"""
+        with self.ctx.db.session() as conn:
+            from musearc.infra.db.repositories import LibraryRepository
+
+            repo = LibraryRepository(conn)
+            count = int(repo.sync_track_language_from_primary_lyrics(only_unknown=bool(only_unknown)) or 0)
+        if count > 0:
+            self._redo_actions.clear()
+            self._log(f"sync_track_language_from_lyrics count={count} only_unknown={bool(only_unknown)}")
+        return count
 
     def list_import_batches(self, limit: int = 200) -> list[dict]:
         """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1alist_import_batches\u3002"""

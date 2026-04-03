@@ -9,7 +9,12 @@ from PySide6.QtWidgets import QApplication, QAbstractItemView, QCheckBox, QCombo
 from musearc.app.facade import MuseArcFacade
 from musearc.ui.table_models import ColumnDef
 from musearc.ui.track_grid import LyricsTableModel, _copy_selected_cells, _install_copy_support, _safe_int
-from musearc.ui.main_window_helpers import TrackPickerDialog, _apply_button_scale, _reveal_in_file_manager
+from musearc.ui.main_window_helpers import (
+    TrackPickerDialog,
+    _apply_button_scale,
+    _install_row_function_shortcuts,
+    _reveal_in_file_manager,
+)
 from musearc.ui.long_task import run_modal_task
 
 
@@ -45,10 +50,11 @@ class LyricsManagementPage(QWidget):
         self.combo_group.addItem("艺术家", "lyrics_artist")
         self.combo_group.addItem("专辑", "lyrics_album")
         self.combo_group.addItem("歌词文件作者", "lyrics_author")
+        self.combo_group.addItem("语言", "lyrics_language")
         self.combo_group.addItem("对应歌曲", "mapped_track")
         self.btn_invert = QPushButton("反选")
         self.chk_multi = QCheckBox("多选模式")
-        self.chk_multi.setChecked(True)
+        self.chk_multi.setChecked(False)
         self.chk_edit_mode = QCheckBox("编辑模式")
         row_ctrl.addWidget(self.btn_invert)
         row_ctrl.addWidget(QLabel("分组"))
@@ -85,6 +91,7 @@ class LyricsManagementPage(QWidget):
                 ColumnDef("lyrics_artist", "艺术家"),
                 ColumnDef("lyrics_album", "专辑"),
                 ColumnDef("lyrics_author", "歌词文件作者"),
+                ColumnDef("lyrics_language", "语言"),
                 ColumnDef("line_count", "歌词行数"),
                 ColumnDef("mapped_track", "对应歌曲"),
                 ColumnDef("lyrics_id", "歌词ID"),
@@ -139,6 +146,15 @@ class LyricsManagementPage(QWidget):
         self.model.lyrics_field_edited.connect(self._on_lyrics_field_edited)
         if self.table.selectionModel() is not None:
             self.table.selectionModel().selectionChanged.connect(lambda *_args: self._refresh_preview())
+        _install_row_function_shortcuts(
+            self,
+            [
+                self.btn_map_track,
+                self.btn_edit_author,
+                self.btn_delete,
+            ],
+            start_f=3,
+        )
 
         self._on_toggle_multi(self.chk_multi.isChecked())
         self._on_toggle_edit_mode(self.chk_edit_mode.isChecked())
@@ -161,6 +177,8 @@ class LyricsManagementPage(QWidget):
 
     def reload_lyrics(self) -> None:
         self._all_rows = self.facade.list_lyrics(limit=200_000)
+        for row in self._all_rows:
+            row["lyrics_language"] = str(row.get("lyrics_language", "") or "unknown")
         self.apply_filter()
 
     def _init_sort_states(self) -> None:
@@ -233,6 +251,7 @@ class LyricsManagementPage(QWidget):
                         str(row.get("lyrics_artist", "")),
                         str(row.get("lyrics_album", "")),
                         str(row.get("lyrics_author", "")),
+                        str(row.get("lyrics_language", "")),
                         str(row.get("mapped_track", "")),
                     ]
                 ).casefold()
@@ -562,4 +581,24 @@ class LyricsManagementPage(QWidget):
             return
         if chosen == action_copy:
             _copy_selected_cells(self.table)
+
+    def focus_lyrics_id(self, lyrics_id: str) -> bool:
+        target = str(lyrics_id or "").strip()
+        if not target:
+            return False
+        self.search_input.clear()
+        self.apply_filter()
+        for row in range(self.model.rowCount()):
+            payload = self.model.row_at(row) or {}
+            if str(payload.get("lyrics_id", "") or "") != target:
+                continue
+            idx = self.model.index(row, 0)
+            if not idx.isValid():
+                continue
+            self.table.setCurrentIndex(idx)
+            self.table.selectRow(row)
+            self.table.scrollTo(idx, QAbstractItemView.ScrollHint.PositionAtCenter)
+            self._refresh_preview()
+            return True
+        return False
 

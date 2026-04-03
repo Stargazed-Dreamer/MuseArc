@@ -68,6 +68,7 @@ class RepositoryPlaylistsMixin:
             SELECT i.position, i.entry, t.track_id, t.file_name, t.title, t.artist, t.album,
                    t.language_kind, t.preference_level, t.duration_sec, t.source_ext, t.storage_format, t.ext_json,
                    t.source_relpath, t.source_fullpath, t.storage_relpath,
+                   l.lyrics_id AS lyrics_id,
                    l.source_relpath AS lyrics_source,
                    CASE WHEN EXISTS(
                      SELECT 1 FROM playlist_items fi

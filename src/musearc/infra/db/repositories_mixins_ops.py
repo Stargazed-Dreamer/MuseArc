@@ -121,7 +121,7 @@ class RepositoryOpsMixin:
                    t.file_name, t.title, t.artist, t.album, t.language_kind,
                    t.preference_level, t.duration_sec, t.source_ext, t.storage_format, t.ext_json,
                    t.source_relpath, t.source_fullpath,
-                   t.storage_relpath, l.source_relpath AS lyrics_source,
+                   t.storage_relpath, l.lyrics_id AS lyrics_id, l.source_relpath AS lyrics_source,
                    CASE WHEN EXISTS(
                      SELECT 1 FROM playlist_items fi
                      WHERE fi.playlist_id = ? AND fi.track_id = t.track_id

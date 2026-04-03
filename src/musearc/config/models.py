@@ -30,6 +30,7 @@ class UiConfig(BaseModel):
     enable_logs: bool = False
     db_autosave_minutes: int = 5
     delete_tracks_mode_default: str = "move_linked_lyrics"
+    lyrics_cell_action_default: str = "change_mapping"
     player_mode: str = "external"
     external_player_path: str = ""
     fingerprint_workers: int = 0

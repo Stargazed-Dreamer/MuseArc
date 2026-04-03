@@ -53,6 +53,9 @@ class MainWindowLogicMixin:
         action_id3_update = QAction("使用ID3和歌词更新歌曲元信息", self)
         action_id3_update.triggered.connect(self._open_id3_update_window)
         menu_more.addAction(action_id3_update)
+        action_sync_lang = QAction("用歌词语言信息更新歌曲语言", self)
+        action_sync_lang.triggered.connect(self._sync_track_language_from_lyrics)
+        menu_more.addAction(action_sync_lang)
 
     def _open_lrclib_window(self) -> None:
         window = LrcLibFetchWindow(self.facade)
@@ -71,6 +74,21 @@ class MainWindowLogicMixin:
         window.destroyed.connect(
             lambda *_args, w=window: self._tool_windows.remove(w) if w in self._tool_windows else None
         )
+
+    def _sync_track_language_from_lyrics(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "同步歌曲语言",
+            "是否仅更新“unknown”的歌曲语言？\n选择“否”将覆盖已有语言。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer == QMessageBox.StandardButton.Cancel:
+            return
+        only_unknown = answer == QMessageBox.StandardButton.Yes
+        count = int(self.facade.sync_track_language_from_lyrics(only_unknown=only_unknown) or 0)
+        self._reload_related_pages()
+        QMessageBox.information(self, "同步歌曲语言", f"已更新 {count} 首歌曲。")
 
     def _save_now(self) -> None:
         self.facade.save_now()
@@ -171,34 +189,67 @@ class MainWindowLogicMixin:
         if select_current and 0 <= current_index < self.list_history.count():
             self.list_history.setCurrentRow(current_index)
 
+    def _ensure_page_dirty_state(self) -> None:
+        if hasattr(self, "_page_dirty") and isinstance(self._page_dirty, dict):
+            return
+        count = self.stack.count() if hasattr(self, "stack") else 0
+        self._page_dirty = {idx: False for idx in range(count)}
+
+    def _reload_page_by_index(self, index: int, *, force: bool = False) -> None:
+        self._ensure_page_dirty_state()
+        if index < 0:
+            return
+        if not force and not bool(self._page_dirty.get(index, False)):
+            return
+        if index == 0:
+            self.page_tracks.reload_tracks_from_db()
+        elif index == 1:
+            self.page_imports.reload_history()
+        elif index == 2:
+            self.page_review.reload_reviews()
+        elif index == 3:
+            self.page_fullscan.reload_works()
+        elif index == 4:
+            self.page_playlist.reload_playlists()
+        elif index == 5:
+            self.page_tags.reload_tags()
+        elif index == 6:
+            self.page_lyrics.reload_lyrics()
+        elif index == 7:
+            self.page_trash.reload_trash()
+        elif index == 8:
+            self.page_settings.refresh_page()
+        self._page_dirty[index] = False
+
     def _reload_related_pages(self) -> None:
-        self.page_review.reload_reviews()
-        self.page_playlist.reload_playlists()
-        self.page_fullscan.reload_works()
-        self.page_imports.reload_history()
-        self.page_tags.reload_tags()
-        self.page_lyrics.reload_lyrics()
-        self.page_trash.reload_trash()
-        self.page_tracks.reload_tracks_from_db()
-        self._refresh_action_history()
+        self._ensure_page_dirty_state()
+        current = self.stack.currentIndex()
+        for idx in (0, 1, 2, 3, 4, 5, 6, 7):
+            if idx == current:
+                self._page_dirty[idx] = False
+                continue
+            self._page_dirty[idx] = True
+        self._refresh_action_history(select_current=False)
 
     def _reload_all_pages(self) -> None:
-        self.page_tracks.reload_tracks_from_db()
-        self.page_imports.reload_history()
-        self.page_review.reload_reviews()
-        self.page_fullscan.reload_works()
-        self.page_playlist.reload_playlists()
-        self.page_tags.reload_tags()
-        self.page_lyrics.reload_lyrics()
-        self.page_trash.reload_trash()
-        self.page_settings.refresh_page()
+        self._ensure_page_dirty_state()
+        for idx in range(self.stack.count()):
+            self._page_dirty[idx] = True
+            self._reload_page_by_index(idx, force=True)
 
     def _on_tags_changed(self) -> None:
         for page in [self.page_tracks, self.page_fullscan, self.page_playlist, self.page_tags]:
             grid = getattr(page, "grid", None)
             if grid is not None and hasattr(grid, "refresh_tag_fields"):
                 grid.refresh_tag_fields()
-        self._reload_all_pages()
+        self._ensure_page_dirty_state()
+        current = self.stack.currentIndex()
+        for idx in (0, 2, 3, 4, 5, 6, 7):
+            if idx == current:
+                self._page_dirty[idx] = False
+                continue
+            self._page_dirty[idx] = True
+        self._refresh_action_history(select_current=False)
 
     def _on_settings_saved(self) -> None:
         self._apply_button_scale_from_config()
@@ -233,20 +284,8 @@ class MainWindowLogicMixin:
                 _apply_button_scale(btn, scale)
 
     def _on_page_changed(self, index: int) -> None:
-        if index == 1:
-            self.page_imports.reload_history()
-        elif index == 2:
-            self.page_review.reload_reviews()
-        elif index == 3:
-            self.page_fullscan.reload_works()
-        elif index == 4:
-            self.page_playlist.reload_playlists()
-        elif index == 5:
-            self.page_tags.reload_tags()
-        elif index == 6:
-            self.page_lyrics.reload_lyrics()
-        elif index == 7:
-            self.page_trash.reload_trash()
+        self._ensure_page_dirty_state()
+        self._reload_page_by_index(index)
         self._refresh_action_history(select_current=False)
 
     def _open_library(self) -> None:

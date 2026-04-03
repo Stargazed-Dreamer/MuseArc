@@ -696,7 +696,7 @@ class ReviewPageSongMixin:
             return
         self.facade.update_tracks_fields([track_id], {field_key: new_value})
         item.setText(3, display)
-        self.reload_reviews()
+        self.reload_reviews(force_refresh_refs=True)
 
     def _on_song_item_double_clicked(self, item: QTreeWidgetItem, _col: int) -> None:
         """\u53cc\u51fb\u6b4c\u66f2\u5ba1\u67e5\u884c\u65f6\u8fdb\u5165\u5019\u9009\u6b4c\u66f2\u7f16\u8f91\u3002"""
@@ -734,7 +734,7 @@ class ReviewPageSongMixin:
                 "album": input_album.text().strip(),
             },
         )
-        self.reload_reviews()
+        self.reload_reviews(force_refresh_refs=True)
 
     def _apply_song_preset_same_for_group(self, group: dict) -> None:
         """\u5e94\u7528“\u8fd9\u662f\u76f8\u540c\u6b4c\u66f2”\u9884\u8bbe\uff1a\u9ed8\u8ba4\u4ec5\u4fdd\u7559\u8d28\u91cf\u6700\u4f73\u9879\u3002"""
@@ -889,7 +889,7 @@ class ReviewPageSongMixin:
                 "审查导入",
                 f"有 {len(failed_imports)} 项导入失败，已保留为待审查。\n{preview}",
             )
-        self.reload_reviews()
+        self.reload_reviews(force_refresh_refs=True)
         self.review_changed.emit()
 
     def _cancel_song_group(self, group: dict) -> None:

@@ -33,6 +33,8 @@ from musearc.ui.track_grid import TrackGridWidget, _copy_selected_cells, _instal
 from musearc.ui.main_window_helpers import (
     _apply_button_scale,
     _choose_or_create_playlist,
+    _handle_track_lyrics_cell_action,
+    _install_row_function_shortcuts,
     _prompt_new_playlist,
     _resolve_delete_mode_and_maybe_save_default,
     _reveal_in_file_manager,
@@ -122,6 +124,18 @@ class FullScanPage(QWidget):
         self.btn_delete.clicked.connect(self.on_delete)
         self.grid.track_field_edited.connect(self.on_track_field_edited)
         self.grid.context_menu_requested.connect(self._show_context_menu)
+        _install_row_function_shortcuts(
+            self,
+            [
+                self.btn_pass,
+                self.btn_add_playlist,
+                self.btn_favorite,
+                self.btn_unfavorite,
+                self.btn_export,
+                self.btn_delete,
+            ],
+            start_f=3,
+        )
 
         self.reload_works()
 
@@ -434,7 +448,7 @@ class FullScanPage(QWidget):
         track_ids = self.selected_track_ids()
         if not track_ids:
             return
-        mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids))
+        mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids), track_ids)
         if mode == "cancel":
             return
         def _step(chunk: list[str]) -> int:
@@ -460,6 +474,12 @@ class FullScanPage(QWidget):
 
     def on_track_field_edited(self, track_id: str, key: str, value) -> None:
         if not track_id or key == "custom_order":
+            return
+        if key == "lyrics_file_name":
+            row = self.grid.track_by_id(track_id)
+            if row and _handle_track_lyrics_cell_action(self, self.facade, [row], action=None):
+                QTimer.singleShot(0, self.on_work_changed)
+                QTimer.singleShot(0, self.library_changed.emit)
             return
         try:
             if key.startswith("tag:"):
@@ -499,6 +519,8 @@ class FullScanPage(QWidget):
         action_add_new = submenu_add.addAction("新建歌单...")
 
         menu.addSeparator()
+        action_change_lyrics = menu.addAction("更改歌词绑定")
+        action_jump_lyrics = menu.addAction("跳转到歌词")
         action_delete = menu.addAction("移到回收站")
         action_export = menu.addAction("导出")
         action_reveal = menu.addAction("使用文件管理器查看")
@@ -555,6 +577,14 @@ class FullScanPage(QWidget):
                 count = int(result.get("affected", 0) or 0)
                 self.grid.set_status(f"已添加 {count} 条到歌单" + ("（已取消）" if cancelled else ""))
                 self.library_changed.emit()
+            return
+        if chosen == action_change_lyrics:
+            if _handle_track_lyrics_cell_action(self, self.facade, tracks, action="change_mapping"):
+                QTimer.singleShot(0, self.on_work_changed)
+                QTimer.singleShot(0, self.library_changed.emit)
+            return
+        if chosen == action_jump_lyrics:
+            _handle_track_lyrics_cell_action(self, self.facade, tracks, action="jump_to_lyrics")
             return
         if chosen == action_delete:
             self.on_delete()
@@ -936,6 +966,17 @@ class TagManagementPage(QWidget):
         self.tree.currentItemChanged.connect(self._on_tag_changed)
         self.grid.track_field_edited.connect(self._on_track_field_edited)
         self.grid.context_menu_requested.connect(self._show_context_menu)
+        _install_row_function_shortcuts(
+            self,
+            [
+                self.btn_remove_from_tag,
+                self.btn_export,
+                self.btn_favorite,
+                self.btn_unfavorite,
+                self.btn_delete_from_library,
+            ],
+            start_f=3,
+        )
 
         self.reload_tags()
 
@@ -1125,7 +1166,7 @@ class TagManagementPage(QWidget):
         track_ids = self._selected_track_ids()
         if not track_ids:
             return
-        mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids))
+        mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids), track_ids)
         if mode == "cancel":
             return
         try:
@@ -1148,6 +1189,12 @@ class TagManagementPage(QWidget):
 
     def _on_track_field_edited(self, track_id: str, key: str, value) -> None:
         if not track_id or key == "custom_order":
+            return
+        if key == "lyrics_file_name":
+            row = self.grid.track_by_id(track_id)
+            if row and _handle_track_lyrics_cell_action(self, self.facade, [row], action=None):
+                QTimer.singleShot(0, self._reload_tracks_for_current_tag)
+                QTimer.singleShot(0, self.library_changed.emit)
             return
         try:
             if key.startswith("tag:"):
@@ -1190,6 +1237,8 @@ class TagManagementPage(QWidget):
         action_add_new = submenu_add.addAction("新建歌单...")
 
         menu.addSeparator()
+        action_change_lyrics = menu.addAction("更改歌词绑定")
+        action_jump_lyrics = menu.addAction("跳转到歌词")
         action_delete = menu.addAction("移到回收站")
         action_export = menu.addAction("导出")
         action_reveal = menu.addAction("使用文件管理器查看")
@@ -1246,6 +1295,14 @@ class TagManagementPage(QWidget):
                 count = int(result.get("affected", 0) or 0)
                 self.grid.set_status(f"已添加 {count} 条到歌单" + ("（已取消）" if cancelled else ""))
                 self.library_changed.emit()
+            return
+        if chosen == action_change_lyrics:
+            if _handle_track_lyrics_cell_action(self, self.facade, tracks, action="change_mapping"):
+                QTimer.singleShot(0, self._reload_tracks_for_current_tag)
+                QTimer.singleShot(0, self.library_changed.emit)
+            return
+        if chosen == action_jump_lyrics:
+            _handle_track_lyrics_cell_action(self, self.facade, tracks, action="jump_to_lyrics")
             return
         if chosen == action_delete:
             self._on_delete_from_library()

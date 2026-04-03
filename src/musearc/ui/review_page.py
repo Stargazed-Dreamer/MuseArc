@@ -9,6 +9,7 @@
 from collections import deque
 from pathlib import Path
 import re
+from time import monotonic
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -275,6 +276,7 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
         self.facade = facade
         self._track_map: dict[str, dict] = {}
         self._lyrics_by_source: dict[str, dict] = {}
+        self._review_ref_cache_deadline: float = 0.0
         self._preview_rows: deque[dict] = deque(maxlen=2)
         self._sync_preview_scroll = False
         self._button_scale = 1.0
@@ -481,10 +483,33 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
 
     def set_facade(self, facade: MuseArcFacade) -> None:
         self.facade = facade
-        self.reload_reviews()
+        self._invalidate_review_reference_cache()
+        self.reload_reviews(force_refresh_refs=True)
 
     def refresh_page(self) -> None:
-        self.reload_reviews()
+        self.reload_reviews(force_refresh_refs=True)
+
+    def _invalidate_review_reference_cache(self) -> None:
+        self._review_ref_cache_deadline = 0.0
+
+    def _ensure_review_reference_maps(self, *, force: bool = False) -> None:
+        now = monotonic()
+        if (
+            not force
+            and self._track_map
+            and self._lyrics_by_source
+            and now < float(self._review_ref_cache_deadline)
+        ):
+            return
+        tracks = self.facade.list_tracks(limit=200_000)
+        self._track_map = {str(r.get("track_id", "")): r for r in tracks if r.get("track_id")}
+        lyrics_rows = self.facade.list_lyrics(limit=300_000)
+        self._lyrics_by_source = {
+            str(r.get("source_relpath", "")).replace("\\", "/"): r
+            for r in lyrics_rows
+            if str(r.get("source_relpath", "")).strip()
+        }
+        self._review_ref_cache_deadline = now + 8.0
 
     @staticmethod
     def _issue_type_of(row: dict) -> str:
@@ -584,16 +609,9 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
         self._review_filter_selected[scope] = new_selected
         self.reload_reviews()
 
-    def reload_reviews(self) -> None:
+    def reload_reviews(self, force_refresh_refs: bool = False) -> None:
         rows = self.facade.pending_reviews(limit=5000)
-        tracks = self.facade.list_tracks(limit=200_000)
-        self._track_map = {str(r.get("track_id", "")): r for r in tracks if r.get("track_id")}
-        lyrics_rows = self.facade.list_lyrics(limit=300_000)
-        self._lyrics_by_source = {
-            str(r.get("source_relpath", "")).replace("\\", "/"): r
-            for r in lyrics_rows
-            if str(r.get("source_relpath", "")).strip()
-        }
+        self._ensure_review_reference_maps(force=force_refresh_refs)
 
         song_rows: list[dict] = []
         lyrics_rows_out: list[dict] = []
@@ -1018,6 +1036,7 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                 fail_count += 1
         QApplication.restoreOverrideCursor()
         self.facade.resolve_reviews([rid for rid, _path in pairs], status="resolved")
-        self.reload_reviews()
+        self._invalidate_review_reference_cache()
+        self.reload_reviews(force_refresh_refs=True)
         self.review_changed.emit()
         QMessageBox.information(self, "重试导入", f"已重试 {len(pairs)} 项，成功 {ok_count}，失败 {fail_count}。")

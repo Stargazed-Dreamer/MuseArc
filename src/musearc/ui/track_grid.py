@@ -725,11 +725,23 @@ class TrackGridWidget(QWidget):
             self.table.apply_controller_selection()
             self._refresh_status()
             return
+        if self.model.column_key(index.column()) == "lyrics_file_name":
+            track = self.model.track_for_row(row) or {}
+            track_id = str(track.get("track_id", "") or "")
+            if track_id:
+                self.track_field_edited.emit(track_id, "lyrics_file_name", "")
+            return
 
     def _on_ctrl_edit_requested(self, index: QModelIndex) -> None:
         if not index.isValid():
             return
         if self.model.is_group_row(index.row()):
+            return
+        if self.model.column_key(index.column()) == "lyrics_file_name":
+            track = self.model.track_for_row(index.row()) or {}
+            track_id = str(track.get("track_id", "") or "")
+            if track_id:
+                self.track_field_edited.emit(track_id, "lyrics_file_name", "")
             return
         if not bool(self.model.flags(index) & Qt.ItemFlag.ItemIsEditable):
             return
@@ -787,6 +799,15 @@ class TrackGridWidget(QWidget):
         empty_btn = box.addButton("留空保存", QMessageBox.ButtonRole.AcceptRole)
         box.exec()
         return box.clickedButton() == empty_btn and box.clickedButton() != keep_btn
+
+    def track_by_id(self, track_id: str) -> dict | None:
+        target = str(track_id or "").strip()
+        if not target:
+            return None
+        for row in self.model.raw_tracks:
+            if str(row.get("track_id", "") or "") == target:
+                return row
+        return None
 
 
 class LyricsTableModel(DictTableModel):

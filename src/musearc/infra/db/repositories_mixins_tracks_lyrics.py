@@ -670,6 +670,25 @@ class RepositoryTracksLyricsMixin:
         ).fetchall()
         return [str(r[0]) for r in rows if r and r[0]]
 
+    def has_linked_lyrics_for_tracks(self, track_ids: Iterable[str]) -> bool:
+        """\u4ed3\u50a8\u65b9\u6cd5\uff1ahas_linked_lyrics_for_tracks\u3002"""
+        ids = [track_id for track_id in track_ids if track_id]
+        if not ids:
+            return False
+        placeholders = _placeholders(len(ids))
+        row = self.conn.execute(
+            f"""
+            SELECT 1
+            FROM track_lyrics tl
+            JOIN lyrics l ON l.lyrics_id = tl.lyrics_id
+            WHERE tl.track_id IN ({placeholders})
+              AND l.deleted_at IS NULL
+            LIMIT 1
+            """,
+            tuple(ids),
+        ).fetchone()
+        return bool(row)
+
     def linked_lyrics_storage_relpaths_for_tracks(self, track_ids: Iterable[str]) -> list[str]:
         """\u4ed3\u50a8\u65b9\u6cd5\uff1alinked_lyrics_storage_relpaths_for_tracks\u3002"""
         ids = [track_id for track_id in track_ids if track_id]
@@ -720,6 +739,37 @@ class RepositoryTracksLyricsMixin:
             tuple(lyrics_ids),
         )
         return int(cursor.rowcount or 0)
+
+    def sync_track_language_from_primary_lyrics(self, *, only_unknown: bool = True) -> int:
+        """\u4ed3\u50a8\u65b9\u6cd5\uff1async_track_language_from_primary_lyrics\u3002"""
+        rows = self.conn.execute(
+            """
+            SELECT t.track_id, t.language_kind, l.ext_json
+            FROM tracks t
+            JOIN track_lyrics tl ON tl.track_id = t.track_id AND tl.is_primary = 1
+            JOIN lyrics l ON l.lyrics_id = tl.lyrics_id
+            WHERE t.deleted_at IS NULL
+              AND l.deleted_at IS NULL
+            """
+        ).fetchall()
+        updated = 0
+        for row in rows:
+            track_id = str(row["track_id"] or "")
+            current = str(row["language_kind"] or "").strip().casefold()
+            if only_unknown and current not in {"", "unknown"}:
+                continue
+            payload = _safe_json_loads(str(row["ext_json"] or ""))
+            lang = str(payload.get("language_kind") or payload.get("language") or "").strip().casefold()
+            if lang in {"", "unknown", "mixed"}:
+                continue
+            if lang == current:
+                continue
+            cursor = self.conn.execute(
+                "UPDATE tracks SET language_kind = ?, updated_at = ? WHERE track_id = ?",
+                (lang, _utc_now_iso(), track_id),
+            )
+            updated += int(cursor.rowcount or 0)
+        return updated
 
     def find_duplicate_candidates(self, duration_sec: float, tolerance_sec: float = 6.0) -> list[dict]:
         """\u4ed3\u50a8\u65b9\u6cd5\uff1afind_duplicate_candidates\u3002"""

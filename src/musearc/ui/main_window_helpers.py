@@ -3,6 +3,7 @@
 from pathlib import Path
 import subprocess
 
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -76,6 +77,52 @@ def _install_copy_support(table: QTableView) -> None:
     shortcut = QShortcut(QKeySequence.StandardKey.Copy, table)
     shortcut.activated.connect(lambda: _copy_selected_cells(table))
     table._copy_shortcut = shortcut
+
+
+class _ButtonHotkeyMarker(QObject):
+    def __init__(self, button: QPushButton, label: QLabel):
+        super().__init__(button)
+        self.button = button
+        self.label = label
+        self.button.installEventFilter(self)
+        self._relayout()
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.button and event.type() in {
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+            QEvent.Type.Move,
+        }:
+            self._relayout()
+        return super().eventFilter(obj, event)
+
+    def _relayout(self) -> None:
+        self.label.adjustSize()
+        x = max(2, self.button.width() - self.label.width() - 4)
+        y = 1
+        self.label.move(x, y)
+        self.label.raise_()
+
+
+def _install_row_function_shortcuts(parent: QWidget, buttons: list[QPushButton], *, start_f: int = 3) -> None:
+    hotkeys: list[QShortcut] = []
+    markers: list[_ButtonHotkeyMarker] = []
+    for idx, button in enumerate(buttons):
+        fn = start_f + idx
+        if fn > 12:
+            break
+        key_text = f"F{fn}"
+        shortcut = QShortcut(QKeySequence(key_text), parent)
+        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        shortcut.activated.connect(lambda btn=button: btn.click() if btn.isEnabled() and btn.isVisible() else None)
+        hotkeys.append(shortcut)
+
+        marker = QLabel(key_text, button)
+        marker.setStyleSheet("font-size:10px;color:#496383;background:transparent;padding:0;")
+        marker.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        markers.append(_ButtonHotkeyMarker(button, marker))
+    parent._function_key_shortcuts = hotkeys
+    parent._function_key_markers = markers
 
 
 def _ask_export_format(parent: QWidget, anchor: QWidget) -> tuple[str, bool]:
@@ -181,10 +228,27 @@ def _ask_delete_tracks_with_lyrics(parent: QWidget, count: int, default_mode: st
     return "cancel", False
 
 
-def _resolve_delete_mode_and_maybe_save_default(parent: QWidget, facade: MuseArcFacade, count: int) -> str:
+def _resolve_delete_mode_and_maybe_save_default(
+    parent: QWidget,
+    facade: MuseArcFacade,
+    count: int,
+    track_ids: list[str] | None = None,
+) -> str:
     cfg = facade.get_runtime_config()
     default_mode = str(cfg.ui.delete_tracks_mode_default or "move_linked_lyrics")
-    mode, remember = _ask_delete_tracks_with_lyrics(parent, count, default_mode)
+    valid_default = default_mode if default_mode in {"move_linked_lyrics", "unlink_only"} else "move_linked_lyrics"
+
+    ids = [str(v) for v in (track_ids or []) if str(v).strip()]
+    if ids:
+        try:
+            has_linked = bool(facade.has_linked_lyrics_for_tracks(ids))
+        except Exception:
+            has_linked = True
+        if not has_linked:
+            # 没有绑定歌词时不弹“歌词处理”确认框，直接沿用默认行为。
+            return valid_default
+
+    mode, remember = _ask_delete_tracks_with_lyrics(parent, count, valid_default)
     if remember and mode in {"move_linked_lyrics", "unlink_only"}:
         cfg.ui.delete_tracks_mode_default = mode
         save_runtime_config(cfg)
@@ -341,6 +405,220 @@ class TrackPickerDialog(QDialog):
     def _accept_clear(self) -> None:
         self.selected_track_id = None
         self.accept()
+
+
+class LyricsPickerDialog(QDialog):
+    def __init__(
+        self,
+        parent: QWidget,
+        facade: MuseArcFacade,
+        *,
+        initial_query: str = "",
+        allow_clear: bool = True,
+    ):
+        super().__init__(parent)
+        self.facade = facade
+        self.selected_lyrics_id: str | None = None
+        self.setWindowTitle("选择歌词映射")
+        self.resize(1180, 700)
+
+        root = QVBoxLayout(self)
+        top = QHBoxLayout()
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("搜索 歌词文件名/标题/艺术家/专辑/语言")
+        self.btn_search = QPushButton("搜索")
+        top.addWidget(self.search_input, 1)
+        top.addWidget(self.btn_search)
+
+        self.model = DictTableModel(
+            [
+                ColumnDef("file_name", "歌词文件名"),
+                ColumnDef("lyrics_title", "歌曲标题"),
+                ColumnDef("lyrics_artist", "艺术家"),
+                ColumnDef("lyrics_album", "专辑"),
+                ColumnDef("lyrics_language", "语言"),
+                ColumnDef("line_count", "行数"),
+                ColumnDef("mapped_track", "对应歌曲"),
+                ColumnDef("lyrics_id", "歌词ID"),
+            ]
+        )
+        self.table = QTableView()
+        self.table.setModel(self.model)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSortingEnabled(True)
+        self.table.horizontalHeader().setStretchLastSection(True)
+
+        self.preview = QTreeWidget()
+        self.preview.setHeaderLabels(["歌词预览"])
+        self.preview.setRootIsDecorated(False)
+        self.preview.setAlternatingRowColors(True)
+
+        split = QHBoxLayout()
+        split.addWidget(self.table, 3)
+        split.addWidget(self.preview, 2)
+
+        self.buttons = QDialogButtonBox()
+        self.btn_ok = self.buttons.addButton("确定", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.btn_cancel = self.buttons.addButton("取消", QDialogButtonBox.ButtonRole.RejectRole)
+        self.btn_clear = self.buttons.addButton("清空映射", QDialogButtonBox.ButtonRole.DestructiveRole) if allow_clear else None
+
+        root.addLayout(top)
+        root.addLayout(split, 1)
+        root.addWidget(self.buttons)
+
+        rows = self.facade.list_lyrics(limit=300_000)
+        self._all_rows: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            item["lyrics_language"] = str(item.get("lyrics_language", "") or "unknown")
+            self._all_rows.append(item)
+        if str(initial_query).strip():
+            self.search_input.setText(str(initial_query).strip())
+        self._apply_filter()
+
+        self.btn_search.clicked.connect(self._apply_filter)
+        self.search_input.returnPressed.connect(self._apply_filter)
+        self.table.doubleClicked.connect(lambda _idx: self._accept_current())
+        if self.table.selectionModel() is not None:
+            self.table.selectionModel().selectionChanged.connect(lambda *_args: self._refresh_preview())
+        self.btn_ok.clicked.connect(self._accept_current)
+        self.btn_cancel.clicked.connect(self.reject)
+        if self.btn_clear is not None:
+            self.btn_clear.clicked.connect(self._accept_clear)
+
+    def _apply_filter(self) -> None:
+        token = self.search_input.text().strip().casefold()
+        if not token:
+            rows = list(self._all_rows)
+        else:
+            rows = []
+            for row in self._all_rows:
+                text = " | ".join(
+                    [
+                        str(row.get("file_name", "")),
+                        str(row.get("lyrics_title", "")),
+                        str(row.get("lyrics_artist", "")),
+                        str(row.get("lyrics_album", "")),
+                        str(row.get("lyrics_language", "")),
+                        str(row.get("mapped_track", "")),
+                    ]
+                ).casefold()
+                if token in text:
+                    rows.append(row)
+        self.model.set_rows(rows)
+        self._refresh_preview()
+
+    def _current_row(self) -> dict | None:
+        sm = self.table.selectionModel()
+        selected = sm.selectedRows() if sm is not None else []
+        if not selected:
+            return None
+        return self.model.row_at(selected[0].row())
+
+    def _refresh_preview(self) -> None:
+        self.preview.clear()
+        row = self._current_row()
+        if not row:
+            return
+        rel = str(row.get("storage_relpath", "") or "").strip()
+        if not rel:
+            self.preview.addTopLevelItem(QTreeWidgetItem(["（无可预览内容）"]))
+            return
+        target = Path(self.facade.library_root) / rel
+        try:
+            text = target.read_text(encoding="utf-8")
+        except Exception as exc:
+            text = f"无法读取歌词: {exc}"
+        lines = text.splitlines()[:200]
+        if not lines:
+            lines = ["（空）"]
+        for line in lines:
+            self.preview.addTopLevelItem(QTreeWidgetItem([str(line)]))
+
+    def _accept_current(self) -> None:
+        row = self._current_row()
+        if not row:
+            QMessageBox.warning(self, "选择歌词", "请先选择一条歌词。")
+            return
+        lyrics_id = str(row.get("lyrics_id", "") or "")
+        if not lyrics_id:
+            QMessageBox.warning(self, "选择歌词", "当前行没有有效 lyrics_id。")
+            return
+        self.selected_lyrics_id = lyrics_id
+        self.accept()
+
+    def _accept_clear(self) -> None:
+        self.selected_lyrics_id = None
+        self.accept()
+
+
+def _resolve_lyrics_cell_default_action(facade: MuseArcFacade) -> str:
+    cfg = facade.get_runtime_config()
+    value = str(getattr(cfg.ui, "lyrics_cell_action_default", "change_mapping") or "change_mapping")
+    if value not in {"change_mapping", "jump_to_lyrics"}:
+        return "change_mapping"
+    return value
+
+
+def _jump_to_lyrics_page(parent: QWidget, lyrics_id: str) -> bool:
+    target_id = str(lyrics_id or "").strip()
+    if not target_id:
+        return False
+    top = parent.window()
+    page = getattr(top, "page_lyrics", None)
+    sidebar = getattr(top, "sidebar", None)
+    if page is None or sidebar is None:
+        return False
+    try:
+        sidebar.setCurrentRow(6)
+    except Exception:
+        return False
+    focus_fn = getattr(page, "focus_lyrics_id", None)
+    if not callable(focus_fn):
+        return False
+    return bool(focus_fn(target_id))
+
+
+def _change_track_lyrics_mapping(parent: QWidget, facade: MuseArcFacade, tracks: list[dict]) -> bool:
+    valid_rows = [dict(r) for r in tracks if str((r or {}).get("track_id", "")).strip()]
+    if not valid_rows:
+        return False
+    first = valid_rows[0]
+    query = str(first.get("title", "") or first.get("file_name", "") or "").strip()
+    dialog = LyricsPickerDialog(parent, facade, initial_query=query, allow_clear=True)
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return False
+    selected_lyrics_id = dialog.selected_lyrics_id
+    for row in valid_rows:
+        track_id = str(row.get("track_id", "") or "").strip()
+        if not track_id:
+            continue
+        facade.set_primary_lyrics_for_track(track_id, selected_lyrics_id)
+    return True
+
+
+def _handle_track_lyrics_cell_action(
+    parent: QWidget,
+    facade: MuseArcFacade,
+    tracks: list[dict],
+    *,
+    action: str | None = None,
+) -> bool:
+    valid_rows = [dict(r) for r in tracks if str((r or {}).get("track_id", "")).strip()]
+    if not valid_rows:
+        return False
+    resolved = str(action or _resolve_lyrics_cell_default_action(facade))
+    if resolved == "jump_to_lyrics":
+        first = valid_rows[0]
+        lyrics_id = str(first.get("lyrics_id", "") or "").strip()
+        if not lyrics_id:
+            QMessageBox.information(parent, "歌词映射", "该歌曲当前没有绑定歌词。")
+            return False
+        return _jump_to_lyrics_page(parent, lyrics_id)
+    return _change_track_lyrics_mapping(parent, facade, valid_rows)
 
 
 class ExportPlanDialog(QDialog):

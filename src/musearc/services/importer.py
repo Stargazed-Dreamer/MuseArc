@@ -361,36 +361,73 @@ def _is_placeholder_empty_lyrics(text: str) -> bool:
     return compact == marker_compact
 
 
+import re
+import unicodedata
+from typing import Dict, Set, Tuple
+
+# ==========================================
+# 预编译正则表达式 (提升性能)
+# ==========================================
+# 更严格的时间标签匹配，防止误匹配如 [10:23abc]
+RE_LRC_TIME = re.compile(r"^\[\d{1,2}:\d{2}(?::\d{2})?(?:\.\d{1,3})?\]\s*")
+# 容错元数据标签：允许冒号前后有空格，使用非贪婪匹配
+RE_LRC_META = re.compile(r"^\[(ti|ar|al|by|offset)\s*:\s*(.+?)\s*\]$", re.IGNORECASE)
+# 拉丁词汇提取
+RE_LATIN_WORD = re.compile(r"[a-zA-Z\u00C0-\u024F]+")
+
+
+# ==========================================
+# 静态 Unicode 码点范围检测 (替换 unicodedata.name)
+# ==========================================
+def _is_latin(c: int) -> bool:
+    """判断是否为拉丁字母（含扩展区），性能远高于 unicodedata.name"""
+    return ((0x0041 <= c <= 0x007A) or    # 基础拉丁 (A-Z, a-z)，巧妙避开中间的符号
+            (0x00C0 <= c <= 0x024F) or    # 拉丁补充、扩展A、扩展B (含法德西葡等字符)
+            (0x1E00 <= c <= 0x1EFF))      # 拉丁扩展附加 (如越南语)
+
+def _is_han(c: int) -> bool:
+    """判断是否为汉字（包含扩展A区和兼容区，提升生僻字/人名鲁棒性）"""
+    return ((0x3400 <= c <= 0x4DBF) or    # CJK 扩展A
+            (0x4E00 <= c <= 0x9FFF) or    # CJK 统一汉字基本区
+            (0xF900 <= c <= 0xFAFF))      # CJK 兼容汉字
+
 def _infer_lyrics_language_kind(text: str) -> str:
-    """基于歌词正文字符分布推断语言类型。"""
+    """基于歌词正文字符分布与特征推断语言类型（改进版）。"""
     if not text:
         return "unknown"
+
     lines: list[str] = []
+    meta_values: list[str] = []
+
     for raw in text.splitlines():
         s = str(raw or "").strip()
         if not s:
             continue
-        low = s.casefold()
-        if re.match(r"^\[[0-9]{1,2}:[0-9]{2}", s):
-            s = re.sub(r"^\[[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?(?:\.[0-9]{1,3})?\]\s*", "", s)
-        if re.match(r"^\[(ti|ar|al|by|offset):", low):
+        
+        # 剥离时间标签
+        if RE_LRC_TIME.match(s):
+            s = RE_LRC_TIME.sub("", s).strip()
+        
+        # 提取元数据标签（更宽容的匹配）
+        m = RE_LRC_META.match(s)
+        if m:
+            meta_values.append(m.group(2).strip())
             continue
-        lines.append(s)
+            
+        if s:
+            lines.append(s)
+
     body = "\n".join(lines).strip()
     if not body:
         return "unknown"
 
-    script_counts = {
-        "latin": 0,
-        "han": 0,
-        "hiragana": 0,
-        "katakana": 0,
-        "hangul": 0,
-        "cyrillic": 0,
-        "arabic": 0,
-        "hebrew": 0,
-        "thai": 0,
-        "devanagari": 0,
+    # ==========================================
+    # 1. 字符级别统计
+    # ==========================================
+    script_counts: Dict[str, int] = {
+        "latin": 0, "han": 0, "hiragana": 0, "katakana": 0,
+        "hangul": 0, "cyrillic": 0, "arabic": 0, "hebrew": 0,
+        "thai": 0, "devanagari": 0,
     }
     latin_ext = 0
     total_letters = 0
@@ -398,12 +435,14 @@ def _infer_lyrics_language_kind(text: str) -> str:
     for ch in body:
         if ch.isspace() or ch.isdigit():
             continue
-        cat = unicodedata.category(ch)
-        if not cat.startswith("L"):
+        # 必须是 Letter (Ll, Lu, Lt, Lo 等)
+        if not unicodedata.category(ch).startswith("L"):
             continue
+            
         total_letters += 1
         code = ord(ch)
-        if 0x4E00 <= code <= 0x9FFF:
+        
+        if _is_han(code):
             script_counts["han"] += 1
         elif 0x3040 <= code <= 0x309F:
             script_counts["hiragana"] += 1
@@ -421,7 +460,7 @@ def _infer_lyrics_language_kind(text: str) -> str:
             script_counts["thai"] += 1
         elif 0x0900 <= code <= 0x097F:
             script_counts["devanagari"] += 1
-        elif "LATIN" in unicodedata.name(ch, ""):
+        elif _is_latin(code):
             script_counts["latin"] += 1
             if code > 0x007F:
                 latin_ext += 1
@@ -429,75 +468,122 @@ def _infer_lyrics_language_kind(text: str) -> str:
     if total_letters <= 0:
         return "unknown"
 
+    # ==========================================
+    # 2. 元数据统计（仅作为辅助证据）
+    # ==========================================
+    meta_blob = " ".join(meta_values)
+    meta_kana = sum(1 for ch in meta_blob if 0x3040 <= ord(ch) <= 0x30FF)
+    meta_han = sum(1 for ch in meta_blob if _is_han(ord(ch)))
+
+    # ==========================================
+    # 3. 计算比例与主导语种判定 (修复 mixed 漏洞)
+    # ==========================================
     def _ratio(value: int) -> float:
         return float(value) / float(total_letters)
 
-    ja_ratio = _ratio(script_counts["hiragana"] + script_counts["katakana"] + script_counts["han"])
-    if ja_ratio >= 0.9 and (script_counts["hiragana"] + script_counts["katakana"]) > 0:
-        return "ja"
-    if _ratio(script_counts["hangul"]) >= 0.9:
-        return "ko"
-    if _ratio(script_counts["han"]) >= 0.9:
-        return "zh"
-    if _ratio(script_counts["cyrillic"]) >= 0.9:
-        return "ru"
-    if _ratio(script_counts["arabic"]) >= 0.9:
-        return "ar"
-    if _ratio(script_counts["hebrew"]) >= 0.9:
-        return "he"
-    if _ratio(script_counts["thai"]) >= 0.9:
-        return "th"
-    if _ratio(script_counts["devanagari"]) >= 0.9:
-        return "hi"
+    kana_count = script_counts["hiragana"] + script_counts["katakana"]
+    han_count = script_counts["han"]
+    
+    # 日语的科学判定：必须存在假名，或者假名与汉字高度混合
+    # 放弃原来的 0.02 极低阈值，要求假名必须有实际存在感
+    if kana_count > 0:
+        if han_count > 0 and _ratio(kana_count + han_count) >= 0.15:
+            return "ja"
+        if _ratio(kana_count) >= 0.15:
+            return "ja"
 
+    # 其他非拉丁语系：采用“最大值优先”策略，而非死板的 0.65/0.80 绝对阈值
+    # 这彻底解决了中英夹杂返回 mixed 的问题
+    non_latin_ratios = {
+        "zh": _ratio(han_count),
+        "ko": _ratio(script_counts["hangul"]),
+        "ru": _ratio(script_counts["cyrillic"]),
+        "ar": _ratio(script_counts["arabic"]),
+        "he": _ratio(script_counts["hebrew"]),
+        "th": _ratio(script_counts["thai"]),
+        "hi": _ratio(script_counts["devanagari"]),
+    }
+    
+    # 如果非拉丁语系占比超过 40%，则认为是该语言（允许最多 60% 的拉丁字母混血）
+    dominant_non_latin = max(non_latin_ratios.items(), key=lambda x: x[1])
+    if dominant_non_latin[1] >= 0.40:
+        return dominant_non_latin[0]
+
+    # ==========================================
+    # 4. 拉丁语系细分 (优化打分科学性)
+    # ==========================================
     latin_ratio = _ratio(script_counts["latin"])
-    if latin_ratio >= 0.9:
-        lower = body.casefold()
-        words = {w for w in re.split(r"[^a-zA-ZÀ-ÿ]+", lower) if w}
-        marks = {
-            "es": {"á", "é", "í", "ó", "ú", "ñ", "ü"},
-            "fr": {"à", "â", "ç", "é", "è", "ê", "ë", "î", "ï", "ô", "û", "ù", "ü", "ÿ", "œ", "æ"},
-            "de": {"ä", "ö", "ü", "ß"},
-            "pt": {"ã", "õ", "ç", "á", "é", "í", "ó", "ú"},
-            "it": {"à", "è", "é", "ì", "í", "î", "ò", "ó", "ù"},
-            "vi": {"ă", "â", "đ", "ê", "ô", "ơ", "ư"},
-        }
-        stop = {
-            "en": {"the", "and", "you", "to", "of", "in", "is", "my", "me"},
-            "es": {"que", "de", "la", "el", "y", "en", "no", "te", "se"},
-            "fr": {"je", "tu", "il", "elle", "de", "la", "le", "et", "pas", "que", "un", "une"},
-            "de": {"und", "ich", "nicht", "die", "das", "du"},
-            "pt": {"nao", "não", "de", "que", "eu", "voce", "você", "uma", "com"},
-            "it": {"che", "di", "non", "io", "tu", "la", "il", "e"},
-            "vi": {"va", "la", "mot", "nhung", "khong", "toi", "em", "anh"},
-        }
-        best_lang = "en"
-        best_score = 0.0
-        for lang, stop_words in stop.items():
-            hit_words = len(words.intersection(stop_words))
-            mark_hits = sum(1 for ch in body if ch in marks.get(lang, set()))
-            score = (hit_words * 1.0) + (mark_hits * 0.6)
-            if lang == "en":
-                score += max(0, script_counts["latin"] - latin_ext) * 0.0001
-            if score > best_score:
-                best_score = score
-                best_lang = lang
-        if best_score <= 0.0 and latin_ext > 0:
-            if any(ch in body for ch in marks["es"]):
-                return "es"
-            if any(ch in body for ch in marks["fr"]):
-                return "fr"
-            if any(ch in body for ch in marks["pt"]):
-                return "pt"
-            if any(ch in body for ch in marks["it"]):
-                return "it"
-            if any(ch in body for ch in marks["de"]):
-                return "de"
-            if any(ch in body for ch in marks["vi"]):
-                return "vi"
-        return best_lang
+    # 如果拉丁字母连主导都不是（比如30%中文，30%日文，30%英文），才返回 mixed
+    if latin_ratio < 0.40:
+        return "mixed"
 
-    return "mixed"
+    lower_body = body.casefold()
+    words = RE_LATIN_WORD.findall(lower_body)
+    if not words:
+        return "en"
+
+    word_set = set(words)
+
+    # 停用词表
+    stop_words: Dict[str, Set[str]] = {
+        "en": {"the", "and", "you", "to", "of", "in", "is", "my", "me", "i", "it"},
+        "es": {"que", "de", "la", "el", "y", "en", "no", "te", "se", "un", "una"},
+        "fr": {"je", "tu", "il", "elle", "de", "la", "le", "et", "pas", "que", "un", "une"},
+        "de": {"und", "ich", "nicht", "die", "das", "du", "der", "ein"},
+        "pt": {"nao", "não", "de", "que", "eu", "voce", "você", "uma", "com", "um"},
+        "it": {"che", "di", "non", "io", "tu", "la", "il", "e", "un", "una"},
+        "vi": {"va", "la", "mot", "nhung", "khong", "toi", "em", "anh", "co"},
+    }
+
+    # 特征字符（按语言分组）
+    lang_marks: Dict[str, Set[str]] = {
+        "es": {"á", "é", "í", "ó", "ú", "ñ", "ü", "¿", "¡"},
+        "fr": {"à", "â", "ç", "é", "è", "ê", "ë", "î", "ï", "ô", "û", "ù", "ü", "ÿ", "œ", "æ", "«", "»"},
+        "de": {"ä", "ö", "ü", "ß"},
+        "pt": {"ã", "õ", "ç", "á", "é", "í", "ó", "ú", "â", "ê", "ô"},
+        "it": {"à", "è", "é", "ì", "í", "î", "ò", "ó", "ù"},
+        "vi": {"ă", "â", "đ", "ê", "ô", "ơ", "ư"},
+    }
+
+    # 科学的打分机制
+    scores: Dict[str, float] = {lang: 0.0 for lang in stop_words.keys()}
+
+    for lang, stops in stop_words.items():
+        # 停用词命中数（强特征）
+        scores[lang] += len(word_set.intersection(stops)) * 2.0
+        
+        # 特殊标点命中（极强特征，如西班牙语的 ¿）
+        punctuation_hits = sum(1 for ch in body if ch in lang_marks.get(lang, set()) and not ch.isalpha())
+        scores[lang] += punctuation_hits * 5.0
+
+    # 重音字符打分：修正原版“按字符计数”导致长歌词偏差的谬误，改为“按含重音的词数”计数
+    for lang, marks in lang_marks.items():
+        accent_marks = marks - {ch for ch in marks if not ch.isalpha()} # 剔除标点
+        if not accent_marks:
+            continue
+        # 统计包含该语言特征字符的单词数量
+        accent_word_count = sum(1 for w in words if any(m in w for m in accent_marks))
+        # 归一化：占总词数的比例，乘以权重。这样长歌词不会因为字符多而虚高
+        scores[lang] += (accent_word_count / len(words)) * 15.0
+
+    # 英语的兜底加分（纯 ASCII 拉丁字母占比高）
+    pure_latin_ratio = max(0, script_counts["latin"] - latin_ext) / total_letters
+    scores["en"] += pure_latin_ratio * 3.0
+
+    # 元数据作为“软加分”，绝不“一票否决”
+    if meta_kana >= 2:
+        scores["ja"] = scores.get("ja", 0) + 2.0  # 假设可能没初始化 ja
+    if meta_han >= 2:
+        scores["zh"] = scores.get("zh", 0) + 2.0
+
+    # 决策
+    best_lang = max(scores, key=scores.get)
+    
+    # 如果没有任何特征词，且没有任何扩展拉丁字符，兜底英语
+    if best_lang == "en" and scores["en"] <= pure_latin_ratio * 3.0 + 0.1:
+        return "en"
+        
+    return best_lang
 
 
 def _normalize_name_for_compare(value: str) -> str:

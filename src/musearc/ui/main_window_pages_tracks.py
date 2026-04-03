@@ -9,6 +9,8 @@ from musearc.ui.track_grid import TrackGridWidget, _copy_selected_cells
 from musearc.ui.main_window_helpers import (
     _apply_button_scale,
     _choose_or_create_playlist,
+    _handle_track_lyrics_cell_action,
+    _install_row_function_shortcuts,
     _prompt_new_playlist,
     _resolve_delete_mode_and_maybe_save_default,
     _reveal_in_file_manager,
@@ -94,6 +96,18 @@ class TracksPage(QWidget):
         self.btn_delete.clicked.connect(self.on_delete)
         self.grid.track_field_edited.connect(self.on_track_field_edited)
         self.grid.context_menu_requested.connect(self._show_context_menu)
+        _install_row_function_shortcuts(
+            self,
+            [
+                self.btn_play,
+                self.btn_export,
+                self.btn_add_playlist,
+                self.btn_favorite,
+                self.btn_unfavorite,
+                self.btn_delete,
+            ],
+            start_f=3,
+        )
 
         self.reload_tracks_from_db()
 
@@ -177,7 +191,7 @@ class TracksPage(QWidget):
     def _delete_track_ids(self, track_ids: list[str]) -> None:
         if not track_ids:
             return
-        mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids))
+        mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids), track_ids)
         if mode == "cancel":
             return
         try:
@@ -193,8 +207,10 @@ class TracksPage(QWidget):
             QMessageBox.warning(self, "操作失败", f"移到回收站失败\n{exc}")
             return
         count = int(result.get("affected", 0) or 0)
+        removed = set(track_ids)
+        self.all_rows = [row for row in self.all_rows if str(row.get("track_id", "")) not in removed]
+        self.apply_search_filter()
         self.grid.set_status(f"已移到回收站 {count} 条" + ("（已取消）" if cancelled else ""))
-        self.reload_tracks_from_db()
         self.library_changed.emit()
 
     def on_delete(self) -> None:
@@ -254,6 +270,15 @@ class TracksPage(QWidget):
             return
         if key == "custom_order":
             return
+        if key == "lyrics_file_name":
+            row = self.grid.track_by_id(track_id) or next(
+                (r for r in self.all_rows if str(r.get("track_id", "")) == str(track_id)),
+                None,
+            )
+            if row and _handle_track_lyrics_cell_action(self, self.facade, [row]):
+                QTimer.singleShot(0, self.reload_tracks_from_db)
+                QTimer.singleShot(0, self.library_changed.emit)
+            return
         try:
             if key.startswith("tag:"):
                 tag_name = key.split(":", 1)[1]
@@ -306,6 +331,8 @@ class TracksPage(QWidget):
         action_add_new = submenu_add.addAction("新建歌单...")
 
         menu.addSeparator()
+        action_change_lyrics = menu.addAction("更改歌词绑定")
+        action_jump_lyrics = menu.addAction("跳转到歌词")
         action_delete = menu.addAction("移到回收站")
         action_export = menu.addAction("导出")
         action_reveal = menu.addAction("使用文件管理器查看")
@@ -331,6 +358,14 @@ class TracksPage(QWidget):
             playlist_id = _prompt_new_playlist(self, self.facade)
             if playlist_id:
                 self._add_track_ids_to_playlist(track_ids, playlist_id)
+            return
+        if chosen == action_change_lyrics:
+            if _handle_track_lyrics_cell_action(self, self.facade, tracks, action="change_mapping"):
+                QTimer.singleShot(0, self.reload_tracks_from_db)
+                QTimer.singleShot(0, self.library_changed.emit)
+            return
+        if chosen == action_jump_lyrics:
+            _handle_track_lyrics_cell_action(self, self.facade, tracks, action="jump_to_lyrics")
             return
         if chosen == action_delete:
             self._delete_track_ids(track_ids)
@@ -432,6 +467,19 @@ class PlaylistPage(QWidget):
         self.tree.currentItemChanged.connect(self.on_playlist_changed)
         self.grid.track_field_edited.connect(self.on_track_field_edited)
         self.grid.context_menu_requested.connect(self._show_context_menu)
+        _install_row_function_shortcuts(
+            self,
+            [
+                self.btn_remove_tracks,
+                self.btn_copy_playlist,
+                self.btn_move_playlist,
+                self.btn_export,
+                self.btn_favorite,
+                self.btn_unfavorite,
+                self.btn_delete,
+            ],
+            start_f=3,
+        )
 
         self.reload_playlists()
 
@@ -705,7 +753,7 @@ class PlaylistPage(QWidget):
         track_ids = self.selected_track_ids()
         if not track_ids:
             return
-        mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids))
+        mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids), track_ids)
         if mode == "cancel":
             return
         try:
@@ -744,6 +792,15 @@ class PlaylistPage(QWidget):
                 return
             self.grid.select_track_ids([track_id])
             QTimer.singleShot(0, self.library_changed.emit)
+            return
+        if key == "lyrics_file_name":
+            row = self.grid.track_by_id(track_id) or next(
+                (r for r in self.current_rows if str(r.get("track_id", "")) == str(track_id)),
+                None,
+            )
+            if row and _handle_track_lyrics_cell_action(self, self.facade, [row]):
+                QTimer.singleShot(0, self.reload_playlist_tracks)
+                QTimer.singleShot(0, self.library_changed.emit)
             return
         try:
             if key.startswith("tag:"):
@@ -796,6 +853,8 @@ class PlaylistPage(QWidget):
         action_map[submenu_move.addAction("新建歌单...")] = ("move_new", None)
 
         menu.addSeparator()
+        action_change_lyrics = menu.addAction("更改歌词绑定")
+        action_jump_lyrics = menu.addAction("跳转到歌词")
         action_remove = menu.addAction("从本歌单中移除")
         action_delete = menu.addAction("移到回收站")
         action_export = menu.addAction("导出")
@@ -863,6 +922,14 @@ class PlaylistPage(QWidget):
                 self.grid.set_status(f"已移动 {count} 首" + ("（已取消）" if cancelled else ""))
                 self.library_changed.emit()
                 return
+            return
+        if chosen == action_change_lyrics:
+            if _handle_track_lyrics_cell_action(self, self.facade, tracks, action="change_mapping"):
+                QTimer.singleShot(0, self.reload_playlist_tracks)
+                QTimer.singleShot(0, self.library_changed.emit)
+            return
+        if chosen == action_jump_lyrics:
+            _handle_track_lyrics_cell_action(self, self.facade, tracks, action="jump_to_lyrics")
             return
         if chosen == action_remove:
             self.remove_selected_tracks()

@@ -600,7 +600,7 @@ class ReviewPageLyricsMixin:
 
         self._preview_rows.clear()
         self._preview_rows.append(first)
-        self.reload_reviews()
+        self.reload_reviews(force_refresh_refs=True)
         self.review_changed.emit()
 
     def _save_lyrics_group(self, group: dict) -> None:
@@ -632,7 +632,7 @@ class ReviewPageLyricsMixin:
             self.facade.resolve_reviews(resolved_ids, status="resolved")
         if ignored_ids:
             self.facade.resolve_reviews(ignored_ids, status="ignored")
-        self.reload_reviews()
+        self.reload_reviews(force_refresh_refs=True)
         self.review_changed.emit()
 
     def _cancel_lyrics_group(self, group: dict) -> None:

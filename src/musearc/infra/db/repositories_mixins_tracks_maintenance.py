@@ -21,6 +21,7 @@ class RepositoryTracksMaintenanceMixin:
                        t.preference_level, t.duration_sec, t.quality_score, t.source_ext, t.storage_format, t.ext_json,
                        t.fingerprint_version, t.fingerprint_digest, t.fingerprint_payload,
                        t.storage_relpath, t.source_relpath, t.source_fullpath, t.source_sha256,
+                       l.lyrics_id AS lyrics_id,
                        l.source_relpath AS lyrics_source,
                        CASE WHEN EXISTS(
                          SELECT 1 FROM playlist_items fi
@@ -59,6 +60,7 @@ class RepositoryTracksMaintenanceMixin:
                        t.preference_level, t.duration_sec, t.quality_score, t.source_ext, t.storage_format, t.ext_json,
                        t.fingerprint_version, t.fingerprint_digest, t.fingerprint_payload,
                        t.storage_relpath, t.source_relpath, t.source_fullpath, t.source_sha256,
+                       l.lyrics_id AS lyrics_id,
                        l.source_relpath AS lyrics_source,
                        CASE WHEN EXISTS(
                          SELECT 1 FROM playlist_items fi
@@ -87,6 +89,7 @@ class RepositoryTracksMaintenanceMixin:
             SELECT t.track_id, t.file_name, t.title, t.artist, t.album, t.language_kind,
                    t.preference_level, t.duration_sec, t.quality_score, t.source_ext, t.storage_format, t.ext_json,
                    t.storage_relpath, t.source_relpath, t.source_fullpath, t.deleted_at,
+                   l.lyrics_id AS lyrics_id,
                    l.source_relpath AS lyrics_source,
                    CASE WHEN EXISTS(
                      SELECT 1 FROM playlist_items fi
