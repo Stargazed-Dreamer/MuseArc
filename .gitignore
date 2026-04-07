@@ -3,4 +3,5 @@
 test*
 /*lib*/
 /*tmp*/
+.build/
 *参考

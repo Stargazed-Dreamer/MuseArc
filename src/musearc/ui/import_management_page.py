@@ -260,7 +260,7 @@ class ImportManagementPage(QWidget):
         root = QVBoxLayout(self)
 
         row1 = QHBoxLayout()
-        self.btn_new_import = QPushButton("导入来源")
+        self.btn_new_import = QPushButton("导入文件夹")
         self.btn_resume_import = QPushButton("继续未完成导入")
         self.btn_import_stats = QPushButton("导入统计数据")
         row1.addWidget(self.btn_new_import)
@@ -342,7 +342,7 @@ class ImportManagementPage(QWidget):
         root.addWidget(self.queue_list)
         history_row = QHBoxLayout()
         left_hist = QVBoxLayout()
-        left_hist.addWidget(QLabel("导入历史"))
+        left_hist.addWidget(QLabel("文件夹导入历史"))
         left_hist.addWidget(self.history_table, 1)
         right_hist = QVBoxLayout()
         right_hist.addWidget(QLabel("统计导入历史"))
@@ -418,7 +418,7 @@ class ImportManagementPage(QWidget):
         dialog.activateWindow()
 
     def on_import(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "选择导入来源")
+        folder = QFileDialog.getExistingDirectory(self, "选择导入文件夹")
         if not folder:
             return
         self._enqueue_source(folder)
