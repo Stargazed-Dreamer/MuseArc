@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """\u5bfc\u5165\u6d41\u7a0b\u7ba1\u7ebf\u3002
 
@@ -113,7 +113,10 @@ def run_import_path(
     seen_lyrics_path_keys = service._load_seen_lyrics_path_keys()
     pending_review_rows = repo.list_pending_reviews(limit=500_000)
     pending_audio_path_keys: set[str] = set()
+    pending_audio_fp_digests: set[str] = set()
+    pending_audio_source_sha256: set[str] = set()
     pending_lyrics_relpath_keys: set[str] = set()
+    pending_lyrics_text_hashes: set[str] = set()
     for review in pending_review_rows:
         payload = review.get("payload") if isinstance(review, dict) else {}
         if not isinstance(payload, dict):
@@ -121,9 +124,18 @@ def run_import_path(
         review_path = str(payload.get("path", "")).strip()
         if review_path:
             pending_audio_path_keys.add(_normalize_source_path_key(review_path))
+        review_fp = str(payload.get("fingerprint_digest", "") or "").strip().lower()
+        if review_fp:
+            pending_audio_fp_digests.add(review_fp)
+        review_sha = str(payload.get("source_sha256", "") or "").strip().lower()
+        if review_sha:
+            pending_audio_source_sha256.add(review_sha)
         lyrics_source = str(payload.get("lyrics_source", "")).replace("\\", "/").strip()
         if lyrics_source:
             pending_lyrics_relpath_keys.add(lyrics_source.casefold())
+        lyrics_hash = str(payload.get("lyrics_text_hash", "") or "").strip().lower()
+        if lyrics_hash:
+            pending_lyrics_text_hashes.add(lyrics_hash)
     skipped_audio_registry_dirty = False
     seen_lyrics_registry_dirty = False
 
@@ -551,6 +563,12 @@ def run_import_path(
                 file_size,
             )
             fp_payload = service.dependencies.fingerprint.encode_vector(fp.vector)
+            fp_digest = str(fp.digest or "").strip().lower()
+            if fp_digest and fp_digest in pending_audio_fp_digests:
+                state.duplicate_tracks += 1
+                set_skipped(relpath, "音频指纹已在待审查队列", source_path=candidate.path)
+                mark_processed(relpath)
+                return
             new_ext_payload = _build_track_ext_payload(probe)
             set_processing(relpath, "源去重")
 
@@ -589,6 +607,7 @@ def run_import_path(
                         title="疑似重复音频",
                         payload={
                             "path": str(candidate.path),
+                            "fingerprint_digest": fp_digest,
                             "score": decision.score,
                             "existing_track_id": decision.existing_track_id,
                             "reason": decision.reason,
@@ -631,31 +650,21 @@ def run_import_path(
                 return
 
             existing_by_sha = repo.get_track_by_source_sha(source_sha)
+            if source_sha and source_sha.strip().lower() in pending_audio_source_sha256:
+                if storage_abs.exists():
+                    storage_abs.unlink(missing_ok=True)
+                state.duplicate_tracks += 1
+                set_skipped(relpath, "source_sha256 已在待审查队列", source_path=candidate.path)
+                mark_processed(relpath)
+                return
             if existing_by_sha:
                 if storage_abs.exists():
                     storage_abs.unlink(missing_ok=True)
+                state.duplicate_tracks += 1
                 if existing_by_sha.get("deleted_at"):
-                    state.review_items += 1
-                    service._enqueue_review(
-                        repo,
-                        ReviewItem(
-                            kind=ReviewKind.DUPLICATE,
-                            title="已删除歌曲重新导入",
-                            payload={
-                                "path": str(candidate.path),
-                                "score": 1.0,
-                                "reason": "命中已删除曲目",
-                                "existing_track_id": str(existing_by_sha.get("track_id", "") or ""),
-                                "group_key": str(existing_by_sha.get("track_id", "") or "")[:8],
-                                "deferred_import": True,
-                            },
-                            priority=2,
-                        ),
-                    )
-                    set_review(relpath, "命中已删除歌曲，待确认是否重新导入")
+                    set_skipped(relpath, "recycled_source_sha256", source_path=candidate.path)
                 else:
-                    state.duplicate_tracks += 1
-                    set_skipped(relpath, "source_sha256??", source_path=candidate.path)
+                    set_skipped(relpath, "source_sha256_duplicate", source_path=candidate.path)
                 mark_processed(relpath)
                 return
 
@@ -1026,6 +1035,11 @@ def run_import_path(
             continue
 
         text_hash = sha1_text(text)
+        if text_hash.strip().lower() in pending_lyrics_text_hashes:
+            set_skipped(relpath, "歌词文本已在待审查队列")
+            mark_seen_lyrics_path(candidate.path)
+            mark_processed(relpath)
+            continue
         lyrics_author, line_count, lyrics_title, lyrics_artist, lyrics_album = _extract_lyrics_meta(text)
         lyrics_language_kind = _infer_lyrics_language_kind(text)
         lyrics_abs: Path | None = None
@@ -1042,10 +1056,11 @@ def run_import_path(
                     payload={
                         "lyrics_source": relpath,
                         "lyrics_id": str(existing_lyrics.get("lyrics_id", "") or ""),
+                        "lyrics_text_hash": text_hash,
                         "suggest_track_id": "",
                         "score": 1.0,
                         "reason": "命中已删除歌词",
-                        "lyrics_preview": text.splitlines()[:10],
+                        "lyrics_preview": text.splitlines(),
                         "group_key": lyrics_group_key,
                         "lyrics_group_key": lyrics_group_key,
                         "lyrics_group_title": lyrics_group_title,
@@ -1186,11 +1201,12 @@ def run_import_path(
                         payload={
                             "lyrics_source": relpath,
                             "lyrics_id": lyrics_id,
+                            "lyrics_text_hash": text_hash,
                             "suggest_track_id": "",
                             "score": 0.0,
                             "reason": "无匹配歌曲",
                             "discard_reason": "无匹配歌曲",
-                            "lyrics_preview": text.splitlines()[:10],
+                            "lyrics_preview": text.splitlines(),
                             "title_hint": candidate.path.stem,
                             "suggest_candidates": lyrics_suggestions,
                             "group_key": lyrics_group_key,
@@ -1294,11 +1310,12 @@ def run_import_path(
                             payload={
                                 "lyrics_source": relpath,
                                 "lyrics_id": lyrics_id,
+                                "lyrics_text_hash": text_hash,
                                 "suggest_track_id": track_id,
                                 "score": max(match_score, round(existing_similarity, 4)),
                                 "reason": review_reason,
                                 "discard_reason": review_reason,
-                                "lyrics_preview": text.splitlines()[:10],
+                                "lyrics_preview": text.splitlines(),
                                 "title_hint": candidate.path.stem,
                                 "suggest_candidates": lyrics_suggestions,
                                 "group_key": lyrics_group_key,
@@ -1309,7 +1326,7 @@ def run_import_path(
                                 "track_dir": target_dir_display if folder_mismatch else "",
                                 "existing_lyrics_id": existing_lyrics_id,
                                 "existing_lyrics_source": existing_lyrics_source,
-                                "existing_lyrics_preview": existing_lyrics_text.splitlines()[:10] if existing_lyrics_text else [],
+                                "existing_lyrics_preview": existing_lyrics_text.splitlines() if existing_lyrics_text else [],
                                 "existing_lyrics_similarity": round(existing_similarity, 4),
                             },
                             priority=2,
@@ -1380,3 +1397,4 @@ def run_import_path(
     service._write_manifest(report)
     emit("done", force=True)
     return report
+

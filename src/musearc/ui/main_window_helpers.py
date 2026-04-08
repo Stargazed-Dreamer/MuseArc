@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QTableView,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -123,6 +124,69 @@ def _install_row_function_shortcuts(parent: QWidget, buttons: list[QPushButton],
         markers.append(_ButtonHotkeyMarker(button, marker))
     parent._function_key_shortcuts = hotkeys
     parent._function_key_markers = markers
+
+
+class _InlineClearButtonLayout(QObject):
+    def __init__(self, line_edit: QLineEdit, button: QToolButton):
+        super().__init__(line_edit)
+        self.line_edit = line_edit
+        self.button = button
+        self.line_edit.installEventFilter(self)
+        self._relayout()
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.line_edit and event.type() in {
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+            QEvent.Type.Move,
+            QEvent.Type.LayoutRequest,
+        }:
+            self._relayout()
+        return super().eventFilter(obj, event)
+
+    def _relayout(self) -> None:
+        self.button.adjustSize()
+        x = max(2, self.line_edit.width() - self.button.width() - 4)
+        y = max(0, (self.line_edit.height() - self.button.height()) // 2)
+        self.button.move(x, y)
+        self.button.raise_()
+
+
+def _clear_line_edit_with_undo(line_edit: QLineEdit) -> None:
+    text = str(line_edit.text() or "")
+    if not text:
+        return
+    line_edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
+    line_edit.selectAll()
+    line_edit.backspace()
+
+
+def _install_inline_clear_button(line_edit: QLineEdit, *, on_cleared=None) -> None:
+    if hasattr(line_edit, "_inline_clear_btn"):
+        return
+    button = QToolButton(line_edit)
+    button.setText("×")
+    button.setCursor(Qt.CursorShape.ArrowCursor)
+    button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    button.setStyleSheet(
+        "QToolButton{border:none;background:transparent;color:#c62828;font-weight:700;font-size:14px;padding:0 2px;}"
+        "QToolButton:hover{color:#8e1d1d;}"
+    )
+    button.setToolTip("清空")
+    button.hide()
+    original_style = str(line_edit.styleSheet() or "")
+    line_edit.setStyleSheet(original_style + " QLineEdit{padding-right:24px;}")
+
+    def _clear() -> None:
+        _clear_line_edit_with_undo(line_edit)
+        if callable(on_cleared):
+            on_cleared()
+
+    button.clicked.connect(_clear)
+    line_edit.textChanged.connect(lambda text: button.setVisible(bool(str(text))))
+
+    line_edit._inline_clear_btn = button
+    line_edit._inline_clear_layout = _InlineClearButtonLayout(line_edit, button)
 
 
 def _ask_export_format(parent: QWidget, anchor: QWidget) -> tuple[str, bool]:

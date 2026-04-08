@@ -295,10 +295,76 @@ class FacadeImportExportMixin:
         self._log(f"export_playlist_package tracks={len(tracks_out)} file={file_path}")
         return str(file_path)
 
+    @staticmethod
+    def _norm_path_for_compare(value: str | Path) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        try:
+            return str(Path(text).expanduser().resolve()).casefold()
+        except Exception:
+            return text.replace("\\", "/").casefold()
+
+    @staticmethod
+    def _resolve_track_from_export_item(
+        item: dict,
+        *,
+        by_sha: dict[str, dict],
+        by_id: dict[str, dict],
+        by_storage: dict[str, dict],
+    ) -> dict | None:
+        tid = str(item.get("track_id", "") or "").strip()
+        storage_rel = str(item.get("storage_relpath", "") or "").replace("\\", "/").strip()
+        source_sha256 = str(item.get("source_sha256", "") or "").strip().lower()
+        row = None
+        if source_sha256:
+            row = by_sha.get(source_sha256)
+        if row is None and tid:
+            row = by_id.get(tid)
+        if row is None and storage_rel:
+            row = by_storage.get(storage_rel)
+        return row
+
+    def inspect_playlist_package(self, file_path: str) -> dict:
+        """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1ainspect_playlist_package\u3002"""
+        path = Path(file_path).expanduser().resolve()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("invalid_playlist_payload")
+        schema = str(payload.get("schema", "") or "")
+        if schema != "musearc_playlist_export_v1":
+            raise ValueError(f"unsupported_schema:{schema}")
+        playlist_hash = str(payload.get("playlist_hash", "") or "").strip()
+        if not playlist_hash:
+            raise ValueError("missing_playlist_hash")
+        playlist_name = str(payload.get("playlist_name", "") or "").strip() or path.stem
+        tracks_raw = payload.get("tracks")
+        track_count = len(tracks_raw) if isinstance(tracks_raw, list) else 0
+        db_location = str(payload.get("database_location", "") or "").strip()
+        db_match = self._norm_path_for_compare(db_location) == self._norm_path_for_compare(self.library_root)
+        existing = next((r for r in self.list_playlists() if str(r.get("name", "")).strip() == playlist_name), None)
+        return {
+            "playlist_hash": playlist_hash,
+            "playlist_name": playlist_name,
+            "track_count": track_count,
+            "database_location": db_location,
+            "database_location_match": db_match,
+            "existing_playlist_id": str((existing or {}).get("playlist_id", "") or ""),
+            "existing_playlist_name": str((existing or {}).get("name", "") or ""),
+            "source_file": str(path),
+        }
+
     def list_stats_import_history(self, limit: int = 200) -> list[dict]:
         """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1alist_stats_import_history\u3002"""
         state = self._load_stats_state()
         rows = [r for r in state.get("history", []) if isinstance(r, dict)]
+        rows.sort(key=lambda r: str(r.get("imported_at", "")), reverse=True)
+        return rows[: max(1, int(limit))]
+
+    def list_playlist_import_history(self, limit: int = 200) -> list[dict]:
+        """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1alist_playlist_import_history\u3002"""
+        state = self._load_stats_state()
+        rows = [r for r in state.get("playlist_import_history", []) if isinstance(r, dict)]
         rows.sort(key=lambda r: str(r.get("imported_at", "")), reverse=True)
         return rows[: max(1, int(limit))]
 
@@ -382,50 +448,23 @@ class FacadeImportExportMixin:
                 impacted_track_ids.add(real_tid)
                 applied += 1
 
-            total_play_count_all = 0
-            for row_map in contributions.values():
-                if not isinstance(row_map, dict):
-                    continue
-                for v in row_map.values():
-                    if not isinstance(v, dict):
-                        continue
-                    total_play_count_all += self._safe_nonneg_int(v.get("play_count", 0), 0)
-
-            for tid in impacted_track_ids:
-                row_map = contributions.get(tid)
-                if not isinstance(row_map, dict):
-                    row_map = {}
-                total = {"play_count": 0, "manual_play_count": 0, "play_seconds": 0, "early_skip_count": 0}
-                for v in row_map.values():
-                    if not isinstance(v, dict):
-                        continue
-                    total["play_count"] += self._safe_nonneg_int(v.get("play_count", 0), 0)
-                    total["manual_play_count"] += self._safe_nonneg_int(v.get("manual_play_count", 0), 0)
-                    total["play_seconds"] += self._safe_nonneg_int(v.get("play_seconds", 0), 0)
-                    total["early_skip_count"] += self._safe_nonneg_int(v.get("early_skip_count", 0), 0)
-                duration_sec = 0.0
-                row = by_id.get(tid)
-                if row:
-                    try:
-                        duration_sec = float(row.get("duration_sec", 0.0) or 0.0)
-                    except Exception:
-                        duration_sec = 0.0
-                love_score = self._compute_love_score(
-                    play_count=total["play_count"],
-                    manual_play_count=total["manual_play_count"],
-                    play_seconds=total["play_seconds"],
-                    early_skip_count=total["early_skip_count"],
-                    total_play_count_all=total_play_count_all,
-                    duration_sec=duration_sec,
-                )
-                repo.update_track_tag_values([tid], "播放次数", str(total["play_count"]))
-                repo.update_track_tag_values([tid], "指定播放次数", str(total["manual_play_count"]))
-                repo.update_track_tag_values([tid], "播放秒数", str(total["play_seconds"]))
-                repo.update_track_tag_values([tid], "早期跳过次数", str(total["early_skip_count"]))
-                repo.update_track_tag_values([tid], "喜爱程度", str(love_score))
+            self._recompute_stats_contributions_and_write_tags(
+                repo=repo,
+                contributions=contributions,
+                impacted_track_ids=impacted_track_ids,
+                by_id=by_id,
+            )
 
             now_iso = datetime.now(timezone.utc).isoformat()
-            history = [r for r in history if str(r.get("playlist_hash", "")) != playlist_hash]
+            source_norm = self._norm_path_for_compare(path)
+            history = [
+                r
+                for r in history
+                if not (
+                    str(r.get("playlist_hash", "")) == playlist_hash
+                    or self._norm_path_for_compare(str(r.get("source_file", "") or "")) == source_norm
+                )
+            ]
             history.append(
                 {
                     "playlist_hash": playlist_hash,
@@ -437,7 +476,13 @@ class FacadeImportExportMixin:
             )
             history.sort(key=lambda r: str(r.get("imported_at", "")), reverse=True)
             history = history[:500]
-            self._save_stats_state({"history": history, "contributions": contributions})
+            self._save_stats_state(
+                {
+                    "history": history,
+                    "contributions": contributions,
+                    "playlist_import_history": playlist_import_history,
+                }
+            )
 
         self._redo_actions.clear()
         self._log(f"import_playlist_stats hash={playlist_hash} applied={applied} skipped={skipped}")
@@ -446,6 +491,262 @@ class FacadeImportExportMixin:
             "applied_tracks": applied,
             "skipped_rows": skipped,
             "source_file": str(path),
+        }
+
+    def _recompute_stats_contributions_and_write_tags(
+        self,
+        *,
+        repo,
+        contributions: dict,
+        impacted_track_ids: set[str],
+        by_id: dict[str, dict],
+    ) -> None:
+        total_play_count_all = 0
+        for row_map in contributions.values():
+            if not isinstance(row_map, dict):
+                continue
+            for item in row_map.values():
+                if not isinstance(item, dict):
+                    continue
+                total_play_count_all += self._safe_nonneg_int(item.get("play_count", 0), 0)
+
+        for tid in impacted_track_ids:
+            row_map = contributions.get(tid)
+            if not isinstance(row_map, dict):
+                row_map = {}
+            total = {"play_count": 0, "manual_play_count": 0, "play_seconds": 0, "early_skip_count": 0}
+            for item in row_map.values():
+                if not isinstance(item, dict):
+                    continue
+                total["play_count"] += self._safe_nonneg_int(item.get("play_count", 0), 0)
+                total["manual_play_count"] += self._safe_nonneg_int(item.get("manual_play_count", 0), 0)
+                total["play_seconds"] += self._safe_nonneg_int(item.get("play_seconds", 0), 0)
+                total["early_skip_count"] += self._safe_nonneg_int(item.get("early_skip_count", 0), 0)
+
+            duration_sec = 0.0
+            row = by_id.get(tid)
+            if row:
+                try:
+                    duration_sec = float(row.get("duration_sec", 0.0) or 0.0)
+                except Exception:
+                    duration_sec = 0.0
+            love_score = self._compute_love_score(
+                play_count=total["play_count"],
+                manual_play_count=total["manual_play_count"],
+                play_seconds=total["play_seconds"],
+                early_skip_count=total["early_skip_count"],
+                total_play_count_all=total_play_count_all,
+                duration_sec=duration_sec,
+            )
+            repo.update_track_tag_values([tid], "播放次数", str(total["play_count"]))
+            repo.update_track_tag_values([tid], "指定播放次数", str(total["manual_play_count"]))
+            repo.update_track_tag_values([tid], "播放秒数", str(total["play_seconds"]))
+            repo.update_track_tag_values([tid], "早期跳过次数", str(total["early_skip_count"]))
+            repo.update_track_tag_values([tid], "喜爱程度", str(love_score))
+
+    def revert_playlist_stats_import(self, playlist_hash: str) -> dict:
+        """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1arevert_playlist_stats_import\u3002"""
+        hash_value = str(playlist_hash or "").strip()
+        if not hash_value:
+            raise ValueError("missing_playlist_hash")
+
+        with self.ctx.db.session() as conn:
+            from musearc.infra.db.repositories import LibraryRepository
+
+            repo = LibraryRepository(conn)
+            all_rows = repo.list_tracks(limit=2_000_000)
+            by_id = {str(r.get("track_id", "")): r for r in all_rows if r.get("track_id")}
+
+            state = self._load_stats_state()
+            history = [r for r in state.get("history", []) if isinstance(r, dict)]
+            playlist_history = [r for r in state.get("playlist_import_history", []) if isinstance(r, dict)]
+            contributions = state.get("contributions")
+            if not isinstance(contributions, dict):
+                contributions = {}
+
+            impacted_track_ids: set[str] = set()
+            removed_rows = 0
+            for track_id, mapping in list(contributions.items()):
+                if not isinstance(mapping, dict):
+                    continue
+                if hash_value in mapping:
+                    mapping.pop(hash_value, None)
+                    impacted_track_ids.add(str(track_id))
+                    removed_rows += 1
+                if not mapping:
+                    contributions.pop(track_id, None)
+
+            if removed_rows <= 0:
+                raise ValueError("playlist_hash_not_found")
+
+            self._recompute_stats_contributions_and_write_tags(
+                repo=repo,
+                contributions=contributions,
+                impacted_track_ids=impacted_track_ids,
+                by_id=by_id,
+            )
+
+            history = [r for r in history if str(r.get("playlist_hash", "")) != hash_value]
+            playlist_history = [r for r in playlist_history if str(r.get("playlist_hash", "")) != hash_value]
+            self._save_stats_state(
+                {
+                    "history": history[:500],
+                    "contributions": contributions,
+                    "playlist_import_history": playlist_history[:500],
+                }
+            )
+
+        self._redo_actions.clear()
+        self._log(f"revert_playlist_stats_import hash={hash_value} affected={len(impacted_track_ids)}")
+        return {
+            "playlist_hash": hash_value,
+            "affected_tracks": len(impacted_track_ids),
+            "removed_rows": removed_rows,
+        }
+
+    def import_playlist_package(self, file_path: str, *, duplicate_mode: str = "rename") -> dict:
+        """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1aimport_playlist_package\u3002"""
+        mode = "overwrite" if str(duplicate_mode) == "overwrite" else "rename"
+        path = Path(file_path).expanduser().resolve()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("invalid_playlist_payload")
+        schema = str(payload.get("schema", "") or "")
+        if schema != "musearc_playlist_export_v1":
+            raise ValueError(f"unsupported_schema:{schema}")
+        playlist_hash = str(payload.get("playlist_hash", "") or "").strip()
+        if not playlist_hash:
+            raise ValueError("missing_playlist_hash")
+        db_location = str(payload.get("database_location", "") or "").strip()
+        if self._norm_path_for_compare(db_location) != self._norm_path_for_compare(self.library_root):
+            raise ValueError("database_location_mismatch")
+        playlist_name = str(payload.get("playlist_name", "") or "").strip() or path.stem
+        tracks_raw = payload.get("tracks")
+        if not isinstance(tracks_raw, list):
+            tracks_raw = []
+
+        with self.ctx.db.session() as conn:
+            from musearc.infra.db.repositories import LibraryRepository
+
+            repo = LibraryRepository(conn)
+            rows = repo.list_tracks(limit=2_000_000)
+            by_id = {str(r.get("track_id", "")): r for r in rows if r.get("track_id")}
+            by_storage = {
+                str(r.get("storage_relpath", "")).replace("\\", "/"): r
+                for r in rows
+                if str(r.get("storage_relpath", "")).strip()
+            }
+            by_sha = {
+                str(r.get("source_sha256", "")).strip().lower(): r
+                for r in rows
+                if str(r.get("source_sha256", "")).strip()
+            }
+
+            matched_track_ids: list[str] = []
+            failed_items: list[dict] = []
+            for item in tracks_raw:
+                if not isinstance(item, dict):
+                    continue
+                resolved = self._resolve_track_from_export_item(
+                    item,
+                    by_sha=by_sha,
+                    by_id=by_id,
+                    by_storage=by_storage,
+                )
+                if resolved is None:
+                    failed_items.append(
+                        {
+                            "track_id": str(item.get("track_id", "") or ""),
+                            "title": str(item.get("title", "") or ""),
+                            "artist": str(item.get("artist", "") or ""),
+                        }
+                    )
+                    continue
+                matched_track_ids.append(str(resolved.get("track_id", "") or ""))
+
+            existing_playlists = [r for r in repo.list_playlists() if str(r.get("playlist_id", "")) != FAVORITES_PLAYLIST_ID]
+            existing_by_name = {str(r.get("name", "")): str(r.get("playlist_id", "")) for r in existing_playlists}
+            target_name = playlist_name
+            target_playlist_id = existing_by_name.get(target_name, "")
+
+            if target_playlist_id and mode == "overwrite":
+                repo.clear_playlist(target_playlist_id)
+                replaced_existing = True
+            else:
+                replaced_existing = False
+                if target_playlist_id:
+                    base = target_name
+                    idx = 2
+                    while target_name in existing_by_name:
+                        target_name = f"{base}({idx})"
+                        idx += 1
+                    target_playlist_id = ""
+                if not target_playlist_id:
+                    target_playlist_id = new_id("pl")
+                    repo.create_playlist(target_playlist_id, target_name, "")
+
+            added_count = int(repo.add_tracks_to_playlist(target_playlist_id, matched_track_ids) or 0)
+
+            state = self._load_stats_state()
+            history = [r for r in state.get("history", []) if isinstance(r, dict)]
+            contributions = state.get("contributions")
+            if not isinstance(contributions, dict):
+                contributions = {}
+            playlist_import_history = [r for r in state.get("playlist_import_history", []) if isinstance(r, dict)]
+            playlist_history = [r for r in state.get("playlist_import_history", []) if isinstance(r, dict)]
+
+            source_norm = self._norm_path_for_compare(path)
+            playlist_history = [
+                r
+                for r in playlist_history
+                if not (
+                    str(r.get("playlist_hash", "")) == playlist_hash
+                    and self._norm_path_for_compare(str(r.get("source_file", "") or "")) == source_norm
+                )
+            ]
+            playlist_history.append(
+                {
+                    "imported_at": datetime.now(timezone.utc).isoformat(),
+                    "playlist_hash": playlist_hash,
+                    "source_file": str(path),
+                    "playlist_name": playlist_name,
+                    "target_playlist_id": target_playlist_id,
+                    "target_playlist_name": target_name,
+                    "matched_tracks": len(matched_track_ids),
+                    "added_tracks": added_count,
+                    "failed_tracks": len(failed_items),
+                    "mode": mode,
+                    "replaced_existing": bool(replaced_existing),
+                    "failed_items": failed_items[:500],
+                }
+            )
+            playlist_history.sort(key=lambda r: str(r.get("imported_at", "")), reverse=True)
+            playlist_history = playlist_history[:500]
+            self._save_stats_state(
+                {
+                    "history": history,
+                    "contributions": contributions,
+                    "playlist_import_history": playlist_history,
+                }
+            )
+
+        self._redo_actions.clear()
+        self._log(
+            f"import_playlist_package hash={playlist_hash} mode={mode} matched={len(matched_track_ids)} "
+            f"added={added_count} failed={len(failed_items)}"
+        )
+        return {
+            "playlist_hash": playlist_hash,
+            "playlist_name": playlist_name,
+            "target_playlist_id": target_playlist_id,
+            "target_playlist_name": target_name,
+            "matched_tracks": len(matched_track_ids),
+            "added_tracks": added_count,
+            "failed_tracks": len(failed_items),
+            "failed_items": failed_items,
+            "source_file": str(path),
+            "mode": mode,
+            "replaced_existing": bool(replaced_existing),
         }
 
     def recompute_love_score_tag(self) -> int:

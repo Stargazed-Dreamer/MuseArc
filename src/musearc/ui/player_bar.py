@@ -1,17 +1,9 @@
 from __future__ import annotations
 
-"""极简内置播放器控制栏。
-
-设计取舍：
-1) 不维护复杂播放列表 UI，只维护内存队列；
-2) 所有页面播放行为均通过“重建队列后播放”；
-3) 关闭按钮等价于系统播放器退出：停止并隐藏。
-"""
-
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer, QUrl
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSlider, QWidget
 
 
@@ -34,6 +26,10 @@ class InlinePlayerBar(QWidget):
         self.player = QMediaPlayer(self)
         self.player.setAudioOutput(self.audio_output)
         self.audio_output.setVolume(0.7)
+
+        self._media_devices = QMediaDevices(self)
+        self._bind_audio_device_signals()
+        self._switch_to_default_output_device()
 
         root = QHBoxLayout(self)
         root.setContentsMargins(8, 6, 8, 6)
@@ -74,6 +70,27 @@ class InlinePlayerBar(QWidget):
 
         self.hide()
 
+    def _bind_audio_device_signals(self) -> None:
+        default_changed = getattr(self._media_devices, "defaultAudioOutputChanged", None)
+        if default_changed is not None:
+            try:
+                default_changed.connect(self._switch_to_default_output_device)
+            except Exception:
+                pass
+        outputs_changed = getattr(self._media_devices, "audioOutputsChanged", None)
+        if outputs_changed is not None:
+            try:
+                outputs_changed.connect(self._switch_to_default_output_device)
+            except Exception:
+                pass
+
+    def _switch_to_default_output_device(self, *_args) -> None:
+        try:
+            device = QMediaDevices.defaultAudioOutput()
+            self.audio_output.setDevice(device)
+        except Exception:
+            return
+
     def play_queue(
         self,
         paths: list[str],
@@ -82,7 +99,6 @@ class InlinePlayerBar(QWidget):
         start_sec: int = 0,
         labels: list[str] | None = None,
     ) -> bool:
-        # 统一入口：每次调用都视为“新会话”，替换旧队列。
         cleaned: list[str] = []
         cleaned_labels: list[str] = []
         for idx, raw in enumerate(paths):
@@ -114,8 +130,12 @@ class InlinePlayerBar(QWidget):
         self._index = -1
         self._pending_seek_ms = 0
 
+    def release_for_file_ops(self) -> None:
+        self.stop_and_hide()
+
     def stop_and_hide(self) -> None:
         self.player.stop()
+        self.player.setSource(QUrl())
         self.clear_queue()
         self.hide()
 
@@ -155,6 +175,7 @@ class InlinePlayerBar(QWidget):
         if not target.exists():
             self.play_next()
             return
+        self._switch_to_default_output_device()
         self.player.setSource(QUrl.fromLocalFile(str(target)))
         self.player.play()
         if self._pending_seek_ms > 0:
@@ -196,7 +217,7 @@ class InlinePlayerBar(QWidget):
         if state == QMediaPlayer.PlaybackState.PlayingState:
             self.btn_play.setText("暂停")
         else:
-            self.btn_play.setText("开始")
+            self.btn_play.setText("播放")
 
     def _on_media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
         if status == QMediaPlayer.MediaStatus.LoadedMedia and self._pending_seek_ms > 0:

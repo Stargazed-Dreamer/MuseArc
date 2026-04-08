@@ -263,9 +263,11 @@ class ImportManagementPage(QWidget):
         self.btn_new_import = QPushButton("导入文件夹")
         self.btn_resume_import = QPushButton("继续未完成导入")
         self.btn_import_stats = QPushButton("导入统计数据")
+        self.btn_import_playlist = QPushButton("导入歌单")
         row1.addWidget(self.btn_new_import)
         row1.addWidget(self.btn_resume_import)
         row1.addWidget(self.btn_import_stats)
+        row1.addWidget(self.btn_import_playlist)
         row1.addStretch(1)
 
         box = QVBoxLayout()
@@ -335,6 +337,26 @@ class ImportManagementPage(QWidget):
         self.stats_table.setAlternatingRowColors(True)
         self.stats_table.horizontalHeader().setStretchLastSection(True)
         _install_copy_support(self.stats_table)
+        self.stats_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+
+        self.playlist_import_model = DictTableModel(
+            [
+                ColumnDef("imported_at", "导入时间"),
+                ColumnDef("playlist_name", "歌单名"),
+                ColumnDef("target_playlist_name", "目标歌单"),
+                ColumnDef("playlist_hash", "歌单哈希"),
+                ColumnDef("added_tracks", "成功"),
+                ColumnDef("failed_tracks", "失败"),
+                ColumnDef("source_file", "来源文件"),
+            ]
+        )
+        self.playlist_import_table = QTableView()
+        self.playlist_import_table.setModel(self.playlist_import_model)
+        self.playlist_import_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.playlist_import_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.playlist_import_table.setAlternatingRowColors(True)
+        self.playlist_import_table.horizontalHeader().setStretchLastSection(True)
+        _install_copy_support(self.playlist_import_table)
 
         root.addLayout(row1)
         root.addLayout(box)
@@ -347,6 +369,8 @@ class ImportManagementPage(QWidget):
         right_hist = QVBoxLayout()
         right_hist.addWidget(QLabel("统计导入历史"))
         right_hist.addWidget(self.stats_table, 1)
+        right_hist.addWidget(QLabel("歌单导入历史"))
+        right_hist.addWidget(self.playlist_import_table, 1)
         history_row.addLayout(left_hist, 3)
         history_row.addLayout(right_hist, 2)
         root.addLayout(history_row, 1)
@@ -354,16 +378,26 @@ class ImportManagementPage(QWidget):
         self.btn_new_import.clicked.connect(self.on_import)
         self.btn_resume_import.clicked.connect(self.on_resume_import)
         self.btn_import_stats.clicked.connect(self.on_import_stats)
+        self.btn_import_playlist.clicked.connect(self.on_import_playlist)
         self.btn_pause_resume.clicked.connect(self._on_pause_resume_import)
         self.btn_cancel.clicked.connect(self._on_cancel_import)
         self.btn_detail.clicked.connect(self._open_running_detail)
         self.history_table.doubleClicked.connect(self._open_history_detail)
+        self.stats_table.customContextMenuRequested.connect(self._show_stats_history_menu)
 
         self.reload_history()
         self._refresh_queue_view()
 
     def apply_button_scale(self, scale: float) -> None:
-        for btn in [self.btn_new_import, self.btn_resume_import, self.btn_import_stats, self.btn_pause_resume, self.btn_cancel, self.btn_detail]:
+        for btn in [
+            self.btn_new_import,
+            self.btn_resume_import,
+            self.btn_import_stats,
+            self.btn_import_playlist,
+            self.btn_pause_resume,
+            self.btn_cancel,
+            self.btn_detail,
+        ]:
             _apply_button_scale(btn, scale)
 
     def set_facade(self, facade: MuseArcFacade) -> None:
@@ -383,6 +417,8 @@ class ImportManagementPage(QWidget):
     def reload_stats_history(self) -> None:
         rows = self.facade.list_stats_import_history(limit=500)
         self.stats_model.set_rows(rows)
+        playlist_rows = self.facade.list_playlist_import_history(limit=500)
+        self.playlist_import_model.set_rows(playlist_rows)
 
     def _ensure_detail_dialog(self) -> ImportTaskDetailDialog:
         if self._detail_dialog is None:
@@ -465,6 +501,99 @@ class ImportManagementPage(QWidget):
             self,
             "导入统计数据",
             f"歌单哈希: {result.get('playlist_hash','')}\n生效歌曲: {result.get('applied_tracks',0)}\n跳过: {result.get('skipped_rows',0)}",
+        )
+
+    def on_import_playlist(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(self, "选择歌单文件", "", "JSON (*.json);;All Files (*)")
+        if not file_path:
+            return
+        try:
+            inspect = self.facade.inspect_playlist_package(file_path)
+        except Exception as exc:
+            QMessageBox.warning(self, "导入歌单", str(exc))
+            return
+
+        if not bool(inspect.get("database_location_match", False)):
+            src = str(inspect.get("database_location", "") or "")
+            cur = str(self.facade.library_root)
+            QMessageBox.warning(self, "导入歌单", f"数据库位置不一致，无法导入。\n文件内: {src}\n当前: {cur}")
+            return
+
+        duplicate_mode = "rename"
+        existing_name = str(inspect.get("existing_playlist_name", "") or "")
+        if existing_name:
+            box = QMessageBox(self)
+            box.setWindowTitle("导入歌单")
+            box.setText(f"已存在同名歌单：{existing_name}")
+            overwrite_btn = box.addButton("覆盖原来的记录和歌单", QMessageBox.ButtonRole.AcceptRole)
+            rename_btn = box.addButton("自动以(x)重命名再导入", QMessageBox.ButtonRole.ActionRole)
+            cancel_btn = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked == cancel_btn:
+                return
+            duplicate_mode = "overwrite" if clicked == overwrite_btn else "rename"
+
+        try:
+            result = self.facade.import_playlist_package(file_path, duplicate_mode=duplicate_mode)
+        except Exception as exc:
+            QMessageBox.warning(self, "导入歌单", str(exc))
+            return
+
+        self.reload_stats_history()
+        self.library_changed.emit()
+        QMessageBox.information(
+            self,
+            "导入歌单",
+            "\n".join(
+                [
+                    f"目标歌单: {result.get('target_playlist_name', '')}",
+                    f"成功: {result.get('added_tracks', 0)}",
+                    f"失败: {result.get('failed_tracks', 0)}",
+                ]
+            ),
+        )
+
+    def _show_stats_history_menu(self, pos) -> None:
+        idx = self.stats_table.indexAt(pos)
+        row = self.stats_model.row_at(idx.row()) if idx.isValid() else None
+        if row is None:
+            selected = self.stats_table.selectionModel().selectedRows() if self.stats_table.selectionModel() is not None else []
+            if selected:
+                row = self.stats_model.row_at(selected[0].row())
+        if not row:
+            return
+
+        playlist_hash = str(row.get("playlist_hash", "") or "").strip()
+        source_file = str(row.get("source_file", "") or "").strip()
+        can_revert = bool(playlist_hash) and bool(source_file) and Path(source_file).exists()
+
+        menu = QMenu(self)
+        action_revert = menu.addAction("取消导入")
+        action_revert.setEnabled(can_revert)
+        action_copy = menu.addAction("复制行数据")
+        chosen = menu.exec(self.stats_table.viewport().mapToGlobal(pos))
+        if not chosen:
+            return
+        if chosen == action_copy:
+            _copy_selected_cells(self.stats_table)
+            return
+        if chosen != action_revert:
+            return
+        answer = QMessageBox.question(self, "取消导入", "确定取消该统计导入并回退其贡献数据吗？")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            result = self.facade.revert_playlist_stats_import(playlist_hash)
+        except Exception as exc:
+            QMessageBox.warning(self, "取消导入", str(exc))
+            return
+        self.reload_stats_history()
+        self.library_changed.emit()
+        QMessageBox.information(
+            self,
+            "取消导入",
+            f"已回退歌单哈希: {result.get('playlist_hash','')}\n影响歌曲: {result.get('affected_tracks',0)}",
         )
 
     def _enqueue_source(self, source_path: str) -> None:

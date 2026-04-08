@@ -204,7 +204,7 @@ class ReviewPageLyricsMixin:
         btn_reveal = QPushButton("📁")
         btn_reveal.setFixedWidth(34)
         lbl_file = _ClickableLabel(str(payload.get("lyrics_file", "") or ""))
-        lbl_file.setMinimumWidth(260)
+        lbl_file.setMinimumWidth(180)
         lbl_file.setToolTip(str(payload.get("lyrics_source", "") or ""))
         lbl_file.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         lbl_score = _ClickableLabel(f"{_safe_float(payload.get('score', 0.0), 0.0):.4f}")
@@ -219,8 +219,14 @@ class ReviewPageLyricsMixin:
         row_layout.addWidget(btn_reveal)
         row_layout.addWidget(lbl_file, 3)
         row_layout.addWidget(lbl_score)
-        row_layout.addWidget(lbl_reason, 2)
         outer.addWidget(top)
+
+        reason_row = QWidget()
+        reason_layout = QHBoxLayout(reason_row)
+        reason_layout.setContentsMargins(34, 0, 0, 0)
+        reason_layout.setSpacing(6)
+        reason_layout.addWidget(lbl_reason, 1)
+        outer.addWidget(reason_row)
 
         link_bind_row = _ClickableFrame()
         link_bind_row.setFrameShape(QFrame.Shape.NoFrame)
@@ -229,7 +235,14 @@ class ReviewPageLyricsMixin:
         bind_layout.setContentsMargins(34, 0, 0, 0)
         bind_layout.setSpacing(6)
         bind_icon = QLabel("🔗")
-        bind_text = QLabel("点击绑定数据库歌曲" if not is_readonly_reference else "库内歌词参考（只读）")
+        suggest_text = str(payload.get("suggest_track", "") or "").strip()
+        if is_readonly_reference:
+            bind_default = "库内歌词参考（只读）"
+        elif suggest_text:
+            bind_default = f"当前已绑：{suggest_text}"
+        else:
+            bind_default = "点击绑定数据库歌曲"
+        bind_text = QLabel(bind_default)
         bind_text.setStyleSheet("color:#5d6f86;")
         bind_icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         bind_text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -237,25 +250,6 @@ class ReviewPageLyricsMixin:
         bind_layout.addWidget(bind_text, 1)
         bind_layout.addStretch(1)
         outer.addWidget(link_bind_row)
-
-        suggest_text = str(payload.get("suggest_track", "") or "").strip()
-        link_suggest_row: _ClickableFrame | None = None
-        if suggest_text:
-            link_suggest_row = _ClickableFrame()
-            link_suggest_row.setFrameShape(QFrame.Shape.NoFrame)
-            link_suggest_row.setStyleSheet("QFrame{background:transparent;border:none;}")
-            suggest_layout = QHBoxLayout(link_suggest_row)
-            suggest_layout.setContentsMargins(34, 0, 0, 0)
-            suggest_layout.setSpacing(6)
-            suggest_icon = QLabel("🔗")
-            suggest_label = QLabel(f"建议：{suggest_text}")
-            suggest_label.setStyleSheet("color:#425b7a;")
-            suggest_icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-            suggest_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-            suggest_layout.addWidget(suggest_icon)
-            suggest_layout.addWidget(suggest_label, 1)
-            suggest_layout.addStretch(1)
-            outer.addWidget(link_suggest_row)
 
         row_ctrl: dict[str, object] = {
             "row": payload,
@@ -275,9 +269,6 @@ class ReviewPageLyricsMixin:
         btn_reveal.clicked.connect(lambda _=False, p=dict(payload): self._reveal_lyrics_file(p))
         if not is_readonly_reference:
             link_bind_row.clicked.connect(_edit_mapping)
-        if link_suggest_row is not None:
-            if not is_readonly_reference:
-                link_suggest_row.clicked.connect(_edit_mapping)
         return row_ctrl
 
     def _reveal_lyrics_file(self, row: dict) -> None:
@@ -449,7 +440,7 @@ class ReviewPageLyricsMixin:
             if isinstance(track, dict):
                 title = str(track.get("title", "") or "")
                 artist = str(track.get("artist", "") or "")
-                label.setText(f"已绑定：{artist or 'Unknown Artist'} - {title or 'Unknown Title'}")
+                label.setText(f"当前已绑：{artist or 'Unknown Artist'} - {title or 'Unknown Title'}")
                 return
         label.setText("点击绑定数据库歌曲")
 
@@ -485,10 +476,21 @@ class ReviewPageLyricsMixin:
                     self.facade,
                     initial_query=self._lyrics_title_hint(current),
                     lyrics_preview_text=self._read_lyrics_text(current),
+                    preselected_track_id=str(current.get("suggest_track_id", "") or ""),
                 )
                 if picker.exec() != QDialog.DialogCode.Accepted:
                     return
                 self.facade.set_primary_track_for_lyrics(lyrics_id, picker.selected_track_id)
+                selected_tid = str(picker.selected_track_id or "")
+                current["suggest_track_id"] = selected_tid
+                if selected_tid:
+                    track = self._track_map.get(selected_tid) if isinstance(getattr(self, "_track_map", {}), dict) else {}
+                    if isinstance(track, dict):
+                        title = str(track.get("title", "") or "")
+                        artist = str(track.get("artist", "") or "")
+                        current["suggest_track"] = f"{artist or 'Unknown Artist'} - {title or 'Unknown Title'}"
+                else:
+                    current["suggest_track"] = ""
                 self._update_lyrics_bind_label(current, picker.selected_track_id)
                 if not chain_next:
                     return
@@ -607,6 +609,7 @@ class ReviewPageLyricsMixin:
         """\u4fdd\u5b58\u5f53\u524d\u6b4c\u8bcd\u5ba1\u67e5\u7ec4\u52fe\u9009\u7ed3\u679c\u3002"""
         status_by_review: dict[str, bool] = {}
         restore_lyrics_ids: set[str] = set()
+        bind_actions: list[tuple[str, str | None]] = []
         entries = group.get("rows") if isinstance(group, dict) else []
         for row_ctrl in entries if isinstance(entries, list) else []:
             row = row_ctrl.get("row") if isinstance(row_ctrl, dict) else {}
@@ -622,10 +625,16 @@ class ReviewPageLyricsMixin:
                 restore_id = str(row.get("restore_lyrics_id", "") or "")
                 if restore_id:
                     restore_lyrics_ids.add(restore_id)
+                lyrics_id = str(row.get("lyrics_id", "") or "")
+                if lyrics_id:
+                    bind_track_id = str(row.get("suggest_track_id", "") or "").strip()
+                    bind_actions.append((lyrics_id, bind_track_id or None))
         if not status_by_review:
             return
         if restore_lyrics_ids:
             self.facade.restore_lyrics(sorted(restore_lyrics_ids))
+        for lyrics_id, track_id in bind_actions:
+            self.facade.set_primary_track_for_lyrics(lyrics_id, track_id)
         resolved_ids = [rid for rid, keep in status_by_review.items() if keep]
         ignored_ids = [rid for rid, keep in status_by_review.items() if not keep]
         if resolved_ids:

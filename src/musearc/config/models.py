@@ -40,6 +40,7 @@ class UiConfig(BaseModel):
     lyrics_match_parallel_threshold: int = 96
     general_worker_limit: int = 0
     fullscan_fp_compare_processes: int = 0
+    realtime_search_enabled: bool = True
 
 
 class RuntimeConfig(BaseModel):

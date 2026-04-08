@@ -208,3 +208,14 @@ class MainWindow(MainWindowLogicMixin, QMainWindow):
             QMessageBox.information(self, "播放", "未找到可播放文件。")
             return False
         return self.player_bar.play_queue(cleaned, start_index=start_index, start_sec=start_sec)
+
+    def release_player_for_file_ops(self) -> None:
+        if getattr(self, "player_bar", None) is None:
+            return
+        try:
+            self.player_bar.release_for_file_ops()
+        except Exception:
+            try:
+                self.player_bar.stop_and_hide()
+            except Exception:
+                pass

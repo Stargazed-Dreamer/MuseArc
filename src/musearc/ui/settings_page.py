@@ -82,6 +82,7 @@ class SettingsPage(QWidget):
 
         self.chk_enable_logs = QCheckBox("启用日志记录（仅保留最近10条）")
         self.chk_empty_confirm = QCheckBox("双击编辑为空时弹窗确认")
+        self.chk_realtime_search = QCheckBox("启用实时搜索（输入即搜索）")
 
         form.addRow("退出多选强制保存阈值", self.spin_threshold)
         form.addRow("撤回最大保留条数", self.spin_undo)
@@ -100,6 +101,7 @@ class SettingsPage(QWidget):
         form.addRow("外部播放器路径", player_row)
         form.addRow("", self.chk_enable_logs)
         form.addRow("", self.chk_empty_confirm)
+        form.addRow("", self.chk_realtime_search)
 
         self.btn_save = QPushButton("保存")
         self.btn_save.clicked.connect(self.save_settings)
@@ -143,6 +145,7 @@ class SettingsPage(QWidget):
         self.input_player_path.setText(str(cfg.ui.external_player_path or ""))
         self.chk_enable_logs.setChecked(bool(cfg.ui.enable_logs))
         self.chk_empty_confirm.setChecked(bool(cfg.ui.prompt_empty_edit_confirm))
+        self.chk_realtime_search.setChecked(bool(getattr(cfg.ui, "realtime_search_enabled", True)))
         self._on_player_mode_changed()
 
     def refresh_page(self) -> None:
@@ -167,6 +170,7 @@ class SettingsPage(QWidget):
         cfg.ui.external_player_path = str(self.input_player_path.text().strip())
         cfg.ui.enable_logs = bool(self.chk_enable_logs.isChecked())
         cfg.ui.prompt_empty_edit_confirm = bool(self.chk_empty_confirm.isChecked())
+        cfg.ui.realtime_search_enabled = bool(self.chk_realtime_search.isChecked())
         save_runtime_config(cfg)
         QMessageBox.information(self, "设置", "设置已保存")
         self.settings_saved.emit()

@@ -11,7 +11,9 @@ from musearc.ui.table_models import ColumnDef
 from musearc.ui.track_grid import LyricsTableModel, _copy_selected_cells, _install_copy_support, _safe_int
 from musearc.ui.main_window_helpers import (
     TrackPickerDialog,
+    _clear_line_edit_with_undo,
     _apply_button_scale,
+    _install_inline_clear_button,
     _install_row_function_shortcuts,
     _reveal_in_file_manager,
 )
@@ -41,6 +43,11 @@ class LyricsManagementPage(QWidget):
         self.btn_search = QPushButton("搜索")
         row_top.addWidget(self.search_input, 1)
         row_top.addWidget(self.btn_search)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(120)
+        self._search_timer.timeout.connect(self.apply_filter)
+        _install_inline_clear_button(self.search_input, on_cleared=self.apply_filter)
 
         row_ctrl = QHBoxLayout()
         self.combo_group = QComboBox()
@@ -129,6 +136,7 @@ class LyricsManagementPage(QWidget):
         self.btn_search.clicked.connect(self.apply_filter)
         self.btn_invert.clicked.connect(self._invert_selection)
         self.search_input.returnPressed.connect(self.apply_filter)
+        self.search_input.textChanged.connect(self._on_search_text_changed)
         self.combo_group.currentIndexChanged.connect(self.apply_filter)
         self.chk_multi.toggled.connect(self._on_toggle_multi)
         self.chk_edit_mode.toggled.connect(self._on_toggle_edit_mode)
@@ -180,6 +188,22 @@ class LyricsManagementPage(QWidget):
         for row in self._all_rows:
             row["lyrics_language"] = str(row.get("lyrics_language", "") or "unknown")
         self.apply_filter()
+
+    def _is_realtime_search_enabled(self) -> bool:
+        cfg = self.facade.get_runtime_config()
+        return bool(getattr(cfg.ui, "realtime_search_enabled", True))
+
+    def _on_search_text_changed(self, _text: str) -> None:
+        if not self._is_realtime_search_enabled():
+            return
+        self._search_timer.start()
+
+    def clear_search_with_undo(self) -> None:
+        _clear_line_edit_with_undo(self.search_input)
+        if self._is_realtime_search_enabled():
+            self._search_timer.start()
+        else:
+            self.apply_filter()
 
     def _init_sort_states(self) -> None:
         keys = [str(col.key) for col in self.model.columns]

@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QColor, QCloseEvent, QKeySequence
+from PySide6.QtGui import QAction, QColor, QCloseEvent, QKeyEvent, QKeySequence
 from PySide6.QtWidgets import QAbstractSpinBox, QFileDialog, QLineEdit, QListWidgetItem, QMessageBox, QPlainTextEdit, QTextEdit
 
 from musearc.app.facade import MuseArcFacade
@@ -31,6 +31,11 @@ def _safe_int(value, default: int = 0) -> int:
 
 
 class MainWindowLogicMixin:
+    def _release_player_for_file_ops(self) -> None:
+        handler = getattr(self, "release_player_for_file_ops", None)
+        if callable(handler):
+            handler()
+
     def _build_menu(self) -> None:
         menu_file = self.menuBar().addMenu("文件")
         action_open = QAction("打开音乐库", self)
@@ -104,6 +109,8 @@ class MainWindowLogicMixin:
         if page is None:
             return
 
+        self._release_player_for_file_ops()
+
         for method_name in (
             "on_delete",
             "on_delete_from_library",
@@ -114,6 +121,16 @@ class MainWindowLogicMixin:
             if callable(fn):
                 fn()
                 return
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Escape:
+            page = self.stack.currentWidget() if hasattr(self, "stack") else None
+            clear_fn = getattr(page, "clear_search_with_undo", None) if page is not None else None
+            if callable(clear_fn):
+                clear_fn()
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def _configure_autosave_timer(self) -> None:
         minutes = max(1, _safe_int(self.facade.get_runtime_config().ui.db_autosave_minutes, 5))

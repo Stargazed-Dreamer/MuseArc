@@ -148,10 +148,12 @@ class _TrackPickerDialog(QDialog):
         *,
         initial_query: str = "",
         lyrics_preview_text: str = "",
+        preselected_track_id: str | None = None,
     ):
         super().__init__(parent)
         self.facade = facade
         self.selected_track_id: str | None = None
+        self._preselected_track_id = str(preselected_track_id or "").strip()
         self.setWindowTitle("选择映射歌曲")
         self.resize(1100, 680)
 
@@ -248,6 +250,23 @@ class _TrackPickerDialog(QDialog):
                 if token in text:
                     rows.append(row)
         self.model.set_rows(rows)
+        self._select_track_if_visible(self._preselected_track_id)
+
+    def _select_track_if_visible(self, track_id: str) -> None:
+        target = str(track_id or "").strip()
+        if not target:
+            return
+        for row_idx in range(self.model.rowCount()):
+            row = self.model.row_at(row_idx) or {}
+            if str(row.get("track_id", "") or "") != target:
+                continue
+            idx = self.model.index(row_idx, 0)
+            if not idx.isValid():
+                continue
+            self.table.setCurrentIndex(idx)
+            self.table.selectRow(row_idx)
+            self.table.scrollTo(idx, QAbstractItemView.ScrollHint.PositionAtCenter)
+            return
 
     def _accept_selected(self) -> None:
         sm = self.table.selectionModel()
@@ -276,6 +295,7 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
         self.facade = facade
         self._track_map: dict[str, dict] = {}
         self._lyrics_by_source: dict[str, dict] = {}
+        self._lyrics_by_id: dict[str, dict] = {}
         self._review_ref_cache_deadline: float = 0.0
         self._preview_rows: deque[dict] = deque(maxlen=2)
         self._sync_preview_scroll = False
@@ -389,10 +409,12 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
         preview_split.addWidget(self.preview_right)
         preview_split.setStretchFactor(0, 1)
         preview_split.setStretchFactor(1, 1)
+        preview_split.setSizes([1, 1])
         preview_layout.addWidget(preview_split, 1)
         split.addWidget(preview_host)
-        split.setStretchFactor(0, 3)
+        split.setStretchFactor(0, 5)
         split.setStretchFactor(1, 1)
+        split.setSizes([1100, 240])
         root.addLayout(row_top)
         root.addWidget(split, 1)
         self.btn_lyrics_filter.clicked.connect(lambda: self._open_review_filter_dialog("lyrics"))
@@ -498,6 +520,7 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
             not force
             and self._track_map
             and self._lyrics_by_source
+            and self._lyrics_by_id
             and now < float(self._review_ref_cache_deadline)
         ):
             return
@@ -508,6 +531,11 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
             str(r.get("source_relpath", "")).replace("\\", "/"): r
             for r in lyrics_rows
             if str(r.get("source_relpath", "")).strip()
+        }
+        self._lyrics_by_id = {
+            str(r.get("lyrics_id", "")): r
+            for r in lyrics_rows
+            if str(r.get("lyrics_id", "")).strip()
         }
         self._review_ref_cache_deadline = now + 8.0
 
@@ -778,6 +806,7 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                 existing_lyrics_id = str(payload.get("existing_lyrics_id", "") or "").strip()
                 if existing_lyrics_id:
                     existing_source = str(payload.get("existing_lyrics_source", "") or "").replace("\\", "/")
+                    existing_row = self._lyrics_by_id.get(existing_lyrics_id) or {}
                     existing_preview_lines = payload.get("existing_lyrics_preview") or []
                     if not isinstance(existing_preview_lines, list):
                         existing_preview_lines = []
@@ -794,9 +823,9 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
                             "lyrics_source": existing_source,
                             "lyrics_file": Path(existing_source).name if existing_source else f"{existing_lyrics_id}.lrc",
                             "lyrics_id": existing_lyrics_id,
-                            "lyrics_title": "",
-                            "lyrics_artist": "",
-                            "storage_relpath": "",
+                            "lyrics_title": str(existing_row.get("lyrics_title", "") or ""),
+                            "lyrics_artist": str(existing_row.get("lyrics_artist", "") or ""),
+                            "storage_relpath": str(existing_row.get("storage_relpath", "") or ""),
                             "suggest_track": "",
                             "suggest_track_id": "",
                             "score": existing_similarity,

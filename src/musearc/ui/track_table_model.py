@@ -122,6 +122,11 @@ class TrackTableModel(QAbstractTableModel):
         self.tag_fields: list[str] = []
         self.columns: list[tuple[str, str, bool]] = list(self.BASE_COLUMNS)
         self._rebuild_pending = False
+        self._rebuild_timer = QTimer(self)
+        self._rebuild_timer.setSingleShot(True)
+        # 避免在编辑器提交同一事件循环里立刻 reset model，触发 commitData/editor 生命周期错位。
+        self._rebuild_timer.setInterval(24)
+        self._rebuild_timer.timeout.connect(self._flush_rebuild)
 
     def set_tag_fields(self, tag_fields: list[str]) -> None:
         unique: list[str] = []
@@ -314,6 +319,7 @@ class TrackTableModel(QAbstractTableModel):
             emit_key = key
             emit_value = parsed
 
+        self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
         self._schedule_rebuild()
         if track_id:
             QTimer.singleShot(0, lambda tid=track_id, k=emit_key, v=emit_value: self.track_field_edited.emit(tid, k, v))
@@ -419,7 +425,7 @@ class TrackTableModel(QAbstractTableModel):
         if self._rebuild_pending:
             return
         self._rebuild_pending = True
-        QTimer.singleShot(0, self._flush_rebuild)
+        self._rebuild_timer.start()
 
     def _flush_rebuild(self) -> None:
         self._rebuild_pending = False

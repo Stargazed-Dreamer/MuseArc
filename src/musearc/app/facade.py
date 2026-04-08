@@ -75,20 +75,27 @@ class MuseArcFacade(FacadeImportExportMixin, FacadeLibraryMixin, FacadeRuntimeMi
         """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1a_load_stats_state\u3002"""
         path = self._stats_state_path()
         if not path.exists():
-            return {"history": [], "contributions": {}}
+            return {"history": [], "contributions": {}, "playlist_import_history": []}
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
-            return {"history": [], "contributions": {}}
+            return {"history": [], "contributions": {}, "playlist_import_history": []}
         if not isinstance(payload, dict):
-            return {"history": [], "contributions": {}}
+            return {"history": [], "contributions": {}, "playlist_import_history": []}
         history = payload.get("history")
         contributions = payload.get("contributions")
+        playlist_import_history = payload.get("playlist_import_history")
         if not isinstance(history, list):
             history = []
         if not isinstance(contributions, dict):
             contributions = {}
-        return {"history": history, "contributions": contributions}
+        if not isinstance(playlist_import_history, list):
+            playlist_import_history = []
+        return {
+            "history": history,
+            "contributions": contributions,
+            "playlist_import_history": playlist_import_history,
+        }
 
     def _save_stats_state(self, payload: dict) -> None:
         """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1a_save_stats_state\u3002"""

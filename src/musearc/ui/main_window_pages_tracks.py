@@ -7,9 +7,11 @@ from PySide6.QtGui import QAction
 from musearc.app.facade import FAVORITES_PLAYLIST_ID, MuseArcFacade
 from musearc.ui.track_grid import TrackGridWidget, _copy_selected_cells
 from musearc.ui.main_window_helpers import (
+    _clear_line_edit_with_undo,
     _apply_button_scale,
     _choose_or_create_playlist,
     _handle_track_lyrics_cell_action,
+    _install_inline_clear_button,
     _install_row_function_shortcuts,
     _prompt_new_playlist,
     _resolve_delete_mode_and_maybe_save_default,
@@ -18,7 +20,7 @@ from musearc.ui.main_window_helpers import (
     _show_track_details,
     _storage_path_for_track_row,
 )
-from musearc.ui.main_window_pages_common import _queue_play_tracks
+from musearc.ui.main_window_pages_common import _queue_play_tracks, _release_player_for_file_ops
 from musearc.ui.long_task import make_chunked_task, run_modal_task
 
 
@@ -60,6 +62,11 @@ class TracksPage(QWidget):
         self.btn_search = QPushButton("搜索")
         row1.addWidget(self.search_input, 1)
         row1.addWidget(self.btn_search)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(120)
+        self._search_timer.timeout.connect(self.apply_search_filter)
+        _install_inline_clear_button(self.search_input, on_cleared=self.apply_search_filter)
 
         row2 = QHBoxLayout()
         self.btn_play = QPushButton("播放")
@@ -88,6 +95,7 @@ class TracksPage(QWidget):
 
         self.btn_search.clicked.connect(self.apply_search_filter)
         self.search_input.returnPressed.connect(self.apply_search_filter)
+        self.search_input.textChanged.connect(self._on_search_text_changed)
         self.btn_play.clicked.connect(self.on_play)
         self.btn_export.clicked.connect(self.on_export)
         self.btn_add_playlist.clicked.connect(self.on_add_to_playlist)
@@ -135,6 +143,22 @@ class TracksPage(QWidget):
     def reload_tracks_from_db(self) -> None:
         self.all_rows = self.facade.list_tracks(limit=2_000_000)
         self.apply_search_filter()
+
+    def _is_realtime_search_enabled(self) -> bool:
+        cfg = self.facade.get_runtime_config()
+        return bool(getattr(cfg.ui, "realtime_search_enabled", True))
+
+    def _on_search_text_changed(self, _text: str) -> None:
+        if not self._is_realtime_search_enabled():
+            return
+        self._search_timer.start()
+
+    def clear_search_with_undo(self) -> None:
+        _clear_line_edit_with_undo(self.search_input)
+        if self._is_realtime_search_enabled():
+            self._search_timer.start()
+        else:
+            self.apply_search_filter()
 
     def apply_search_filter(self) -> None:
         query = self.search_input.text().strip().casefold()
@@ -191,6 +215,7 @@ class TracksPage(QWidget):
     def _delete_track_ids(self, track_ids: list[str]) -> None:
         if not track_ids:
             return
+        _release_player_for_file_ops(self)
         mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids), track_ids)
         if mode == "cancel":
             return
@@ -753,6 +778,7 @@ class PlaylistPage(QWidget):
         track_ids = self.selected_track_ids()
         if not track_ids:
             return
+        _release_player_for_file_ops(self)
         mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids), track_ids)
         if mode == "cancel":
             return

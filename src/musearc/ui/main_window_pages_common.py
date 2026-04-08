@@ -11,3 +11,10 @@ def _queue_play_tracks(parent: QWidget, tracks: list[dict], *, start_track_id: s
         return bool(handler(list(tracks), start_track_id=start_track_id))
     QMessageBox.information(parent, "??", "?????????????")
     return False
+
+
+def _release_player_for_file_ops(parent: QWidget) -> None:
+    top = parent.window()
+    handler = getattr(top, "release_player_for_file_ops", None)
+    if callable(handler):
+        handler()

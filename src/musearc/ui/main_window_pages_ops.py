@@ -42,7 +42,7 @@ from musearc.ui.main_window_helpers import (
     _show_track_details,
     _storage_path_for_track_row,
 )
-from musearc.ui.main_window_pages_common import _queue_play_tracks
+from musearc.ui.main_window_pages_common import _queue_play_tracks, _release_player_for_file_ops
 from musearc.ui.long_task import make_chunked_task, run_modal_task
 
 
@@ -448,6 +448,7 @@ class FullScanPage(QWidget):
         track_ids = self.selected_track_ids()
         if not track_ids:
             return
+        _release_player_for_file_ops(self)
         mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids), track_ids)
         if mode == "cancel":
             return
@@ -769,6 +770,7 @@ class TrashPage(QWidget):
         items = self._selected_items()
         if not items:
             return
+        _release_player_for_file_ops(self)
         answer = QMessageBox.question(self, "删除文件", f"仅删除 {len(items)} 条对应文件（保留元数据）？")
         if answer != QMessageBox.StandardButton.Yes:
             return
@@ -1166,6 +1168,7 @@ class TagManagementPage(QWidget):
         track_ids = self._selected_track_ids()
         if not track_ids:
             return
+        _release_player_for_file_ops(self)
         mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids), track_ids)
         if mode == "cancel":
             return

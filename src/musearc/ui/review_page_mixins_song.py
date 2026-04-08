@@ -377,7 +377,7 @@ class ReviewPageSongMixin:
         source_path = str(payload.get("source_path", "") or "").strip()
         source_file = str(payload.get("source_file", "") or "").strip() or Path(source_path).name
         lbl_file_name = _ClickableLabel(source_file)
-        lbl_file_name.setMinimumWidth(260)
+        lbl_file_name.setMinimumWidth(180)
         lbl_file_name.setToolTip(source_path)
 
         lbl_source_kind = QLabel("待导入")
@@ -398,8 +398,14 @@ class ReviewPageSongMixin:
         row_layout.addWidget(lbl_file_name, 3)
         row_layout.addWidget(lbl_source_kind)
         row_layout.addWidget(lbl_score)
-        row_layout.addWidget(lbl_reason, 2)
         outer.addWidget(top)
+
+        reason_row = QWidget()
+        reason_layout = QHBoxLayout(reason_row)
+        reason_layout.setContentsMargins(106, 0, 0, 0)
+        reason_layout.setSpacing(6)
+        reason_layout.addWidget(lbl_reason, 1)
+        outer.addWidget(reason_row)
 
         row_ctrl: dict[str, object] = {
             "row": payload,
@@ -449,7 +455,7 @@ class ReviewPageSongMixin:
                 candidate_file = Path(candidate_path).name
             candidate_text = candidate_track if _looks_like_hash_filename(candidate_file) else (candidate_file or candidate_track or "（无候选）")
             lbl_candidate_name = _ClickableLabel(candidate_text)
-            lbl_candidate_name.setMinimumWidth(260)
+            lbl_candidate_name.setMinimumWidth(180)
             candidate_tip = str(candidate.get("candidate_path", "") or "")
             if candidate_track:
                 candidate_tip = f"{candidate_tip}\n{candidate_track}" if candidate_tip else candidate_track
@@ -471,8 +477,13 @@ class ReviewPageSongMixin:
             candidate_layout.addWidget(lbl_candidate_name, 3)
             candidate_layout.addWidget(lbl_candidate_source)
             candidate_layout.addWidget(lbl_candidate_score)
-            candidate_layout.addWidget(lbl_candidate_reason, 2)
             outer.addWidget(candidate_row)
+            candidate_reason_row = QWidget()
+            candidate_reason_layout = QHBoxLayout(candidate_reason_row)
+            candidate_reason_layout.setContentsMargins(106, 0, 0, 0)
+            candidate_reason_layout.setSpacing(6)
+            candidate_reason_layout.addWidget(lbl_candidate_reason, 1)
+            outer.addWidget(candidate_reason_row)
             row_ctrl["candidate_controls"].append(
                 {
                     "checkbox": candidate_checkbox,
