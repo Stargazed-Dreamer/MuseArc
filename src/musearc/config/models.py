@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -41,6 +41,7 @@ class UiConfig(BaseModel):
     general_worker_limit: int = 0
     fullscan_fp_compare_processes: int = 0
     realtime_search_enabled: bool = True
+    player_link_port: int = 43121
 
 
 class RuntimeConfig(BaseModel):

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -103,6 +103,11 @@ class SettingsPage(QWidget):
         form.addRow("", self.chk_empty_confirm)
         form.addRow("", self.chk_realtime_search)
 
+        self.spin_player_link_port = QSpinBox()
+        self.spin_player_link_port.setRange(1024, 65535)
+        self.spin_player_link_port.setValue(43121)
+        form.addRow("播放器联动端口", self.spin_player_link_port)
+
         self.btn_save = QPushButton("保存")
         self.btn_save.clicked.connect(self.save_settings)
 
@@ -146,6 +151,7 @@ class SettingsPage(QWidget):
         self.chk_enable_logs.setChecked(bool(cfg.ui.enable_logs))
         self.chk_empty_confirm.setChecked(bool(cfg.ui.prompt_empty_edit_confirm))
         self.chk_realtime_search.setChecked(bool(getattr(cfg.ui, "realtime_search_enabled", True)))
+        self.spin_player_link_port.setValue(int(getattr(cfg.ui, "player_link_port", 43121)))
         self._on_player_mode_changed()
 
     def refresh_page(self) -> None:
@@ -171,6 +177,7 @@ class SettingsPage(QWidget):
         cfg.ui.enable_logs = bool(self.chk_enable_logs.isChecked())
         cfg.ui.prompt_empty_edit_confirm = bool(self.chk_empty_confirm.isChecked())
         cfg.ui.realtime_search_enabled = bool(self.chk_realtime_search.isChecked())
+        cfg.ui.player_link_port = int(self.spin_player_link_port.value())
         save_runtime_config(cfg)
         QMessageBox.information(self, "设置", "设置已保存")
         self.settings_saved.emit()

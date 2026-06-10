@@ -36,6 +36,7 @@ from musearc.ui.main_window_components import (
 )
 from musearc.ui.main_window_logic import MainWindowLogicMixin
 from musearc.ui.player_bar import InlinePlayerBar
+from musearc.ui.player_link_page import PlayerLinkPage
 from musearc.ui.review_page import ReviewPage
 from musearc.ui.settings_page import SettingsPage
 
@@ -71,6 +72,7 @@ class MainWindow(MainWindowLogicMixin, QMainWindow):
                 "歌单管理",
                 "标签管理",
                 "歌词管理",
+                "播放器联动",
                 "回收站",
                 "设置",
             ]
@@ -98,6 +100,7 @@ class MainWindow(MainWindowLogicMixin, QMainWindow):
         self.page_playlist = PlaylistPage(self.facade)
         self.page_tags = TagManagementPage(self.facade)
         self.page_lyrics = LyricsManagementPage(self.facade)
+        self.page_player_link = PlayerLinkPage(self.facade)
         self.page_trash = TrashPage(self.facade)
         self.page_settings = SettingsPage(self.facade)
 
@@ -108,6 +111,7 @@ class MainWindow(MainWindowLogicMixin, QMainWindow):
         self.stack.addWidget(self.page_playlist)
         self.stack.addWidget(self.page_tags)
         self.stack.addWidget(self.page_lyrics)
+        self.stack.addWidget(self.page_player_link)
         self.stack.addWidget(self.page_trash)
         self.stack.addWidget(self.page_settings)
 
@@ -133,6 +137,7 @@ class MainWindow(MainWindowLogicMixin, QMainWindow):
         self.page_tags.tags_changed.connect(self._on_tags_changed)
         self.page_tags.library_changed.connect(self._reload_related_pages)
         self.page_lyrics.library_changed.connect(self._reload_related_pages)
+        self.page_player_link.library_changed.connect(self._reload_related_pages)
         self.page_trash.library_changed.connect(self._reload_related_pages)
         if hasattr(self.page_review, "review_changed"):
             self.page_review.review_changed.connect(self._reload_related_pages)

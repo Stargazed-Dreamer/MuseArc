@@ -233,15 +233,17 @@ class MainWindowLogicMixin:
         elif index == 6:
             self.page_lyrics.reload_lyrics()
         elif index == 7:
-            self.page_trash.reload_trash()
+            self.page_player_link.refresh_page()
         elif index == 8:
+            self.page_trash.reload_trash()
+        elif index == 9:
             self.page_settings.refresh_page()
         self._page_dirty[index] = False
 
     def _reload_related_pages(self) -> None:
         self._ensure_page_dirty_state()
         current = self.stack.currentIndex()
-        for idx in (0, 1, 2, 3, 4, 5, 6, 7):
+        for idx in (0, 1, 2, 3, 4, 5, 6, 7, 8):
             if idx == current:
                 self._page_dirty[idx] = False
                 continue
@@ -261,7 +263,7 @@ class MainWindowLogicMixin:
                 grid.refresh_tag_fields()
         self._ensure_page_dirty_state()
         current = self.stack.currentIndex()
-        for idx in (0, 2, 3, 4, 5, 6, 7):
+        for idx in (0, 2, 3, 4, 5, 6, 7, 8):
             if idx == current:
                 self._page_dirty[idx] = False
                 continue
@@ -276,6 +278,7 @@ class MainWindowLogicMixin:
         self.page_fullscan.set_facade(self.facade)
         self.page_tags.set_facade(self.facade)
         self.page_lyrics.set_facade(self.facade)
+        self.page_player_link.set_facade(self.facade)
         self.page_trash.set_facade(self.facade)
 
     def _apply_button_scale_from_config(self) -> None:
@@ -287,6 +290,7 @@ class MainWindowLogicMixin:
         self.page_playlist.apply_button_scale(scale)
         self.page_tags.apply_button_scale(scale)
         self.page_lyrics.apply_button_scale(scale)
+        self.page_player_link.apply_button_scale(scale)
         self.page_trash.apply_button_scale(scale)
         self.page_settings.apply_button_scale(scale)
         _apply_button_scale(self.btn_undo, scale)
