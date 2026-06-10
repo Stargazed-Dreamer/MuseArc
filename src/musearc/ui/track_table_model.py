@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
@@ -443,6 +443,9 @@ class TrackTableModel(QAbstractTableModel):
             items.sort(key=lambda x, k=key: self._sort_value(x, k), reverse=reverse)
         return items
 
+    # 已知的数值型标签名（排序/分组时按数值处理）
+    NUMERIC_TAG_NAMES = {"播放次数", "指定播放次数", "播放秒数", "早期跳过次数", "喜爱程度", "比特率", "采样率", "位深度", "声道数"}
+
     def _sort_value(self, row: dict, key: str):
         mapped = "duration_sec" if key == "duration_mmss" else key
         if mapped == "custom_order":
@@ -456,7 +459,25 @@ class TrackTableModel(QAbstractTableModel):
             return 1.0 if bool(row.get("is_favorite")) else 0.0
         if mapped == "lyrics_file_name":
             return str(row.get("lyrics_file_name") or basename(row.get("lyrics_source", ""))).casefold()
-        return str(row.get(mapped, "") or "").casefold()
+        # tag:* 字段：数值型标签按数值排序
+        if mapped.startswith("tag:"):
+            tag_name = mapped.split(":", 1)[1] if ":" in mapped else mapped
+            raw = row.get(mapped, "")
+            if tag_name in self.NUMERIC_TAG_NAMES:
+                try:
+                    return (0, float(raw))
+                except Exception:
+                    return (1, str(raw or "").casefold())
+            return str(raw or "").casefold()
+        # 通用字段：尝试数值解析
+        raw = row.get(mapped, "")
+        if isinstance(raw, (int, float)):
+            return (0, float(raw))
+        text = str(raw or "")
+        try:
+            return (0, float(text))
+        except Exception:
+            return (1, text.casefold())
 
     def _group_rows(self, rows: list[dict]) -> list[dict]:
         if not self.group_by:
@@ -469,7 +490,13 @@ class TrackTableModel(QAbstractTableModel):
             groups[gk].append(row)
             labels[gk] = label
 
-        keys = sorted(groups.keys(), key=lambda k: labels.get(k, k).casefold())
+        # 数值型分桶的 group_key 已包含前导零（如 tag:播放次数:0002），直接按 key 排序可保证数值顺序；
+        # 文本型分组的 group_key 含前缀（如 name:zh:A），按 label 排序更直观。
+        # 统一先按 group_key 排序（数值分桶正确），再对纯文本分组按 label 重排。
+        if self.group_by and (self.group_by.startswith("tag:") and self.group_by.split(":", 1)[1] in self.NUMERIC_TAG_NAMES):
+            keys = sorted(groups.keys())
+        else:
+            keys = sorted(groups.keys(), key=lambda k: labels.get(k, k).casefold())
         display: list[dict] = []
         for gk in keys:
             rows_in_group = groups[gk]
@@ -544,14 +571,52 @@ class TrackTableModel(QAbstractTableModel):
 
         if key.startswith("tag:"):
             tag_name = key.split(":", 1)[1] if ":" in key else key
-            if tag_name == "喜爱程度":
-                score = _safe_int_value(row.get(key, 0), 0)
-                score = max(0, min(100, score))
-                bucket = (score // 10) * 10
-                upper = min(100, bucket + 9)
-                label = f"{bucket}~{upper}"
-                return f"{key}:{bucket}", label
-            value = str(row.get(key, "") or "(空)")
+            raw = row.get(key, "")
+            if tag_name in self.NUMERIC_TAG_NAMES:
+                num = _safe_int_value(raw, 0)
+                if tag_name == "喜爱程度":
+                    num = max(0, min(100, num))
+                    bucket = (num // 10) * 10
+                    upper = min(100, bucket + 9)
+                    label = f"{bucket}~{upper}"
+                    return f"{key}:{bucket:04d}", label
+                if tag_name in {"播放秒数"}:
+                    if num <= 0:
+                        return f"{key}:0000", "0s"
+                    if num <= 60:
+                        return f"{key}:0001", "0~1min"
+                    if num <= 300:
+                        return f"{key}:0002", "1~5min"
+                    if num <= 600:
+                        return f"{key}:0003", "5~10min"
+                    if num <= 1800:
+                        return f"{key}:0004", "10~30min"
+                    return f"{key}:0005", "30min+"
+                if tag_name in {"比特率", "采样率"}:
+                    if num <= 0:
+                        return f"{key}:0000", "未知"
+                    if num < 128000:
+                        return f"{key}:0001", "<128k"
+                    if num < 256000:
+                        return f"{key}:0002", "128k~256k"
+                    if num < 320000:
+                        return f"{key}:0003", "256k~320k"
+                    if num < 1000000:
+                        return f"{key}:0004", "320k~1M"
+                    return f"{key}:0005", "1M+"
+                # 播放次数、指定播放次数、早期跳过次数、位深度、声道数等
+                if num <= 0:
+                    return f"{key}:0000", "0"
+                if num <= 5:
+                    return f"{key}:0001", "1~5"
+                if num <= 10:
+                    return f"{key}:0002", "6~10"
+                if num <= 50:
+                    return f"{key}:0003", "11~50"
+                if num <= 100:
+                    return f"{key}:0004", "51~100"
+                return f"{key}:0005", "100+"
+            value = str(raw or "(空)")
             return f"{key}:{value}", value
 
         value = str(row.get(key, "") or "(空)")

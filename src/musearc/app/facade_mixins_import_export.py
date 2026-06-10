@@ -368,6 +368,44 @@ class FacadeImportExportMixin:
         rows.sort(key=lambda r: str(r.get("imported_at", "")), reverse=True)
         return rows[: max(1, int(limit))]
 
+    @staticmethod
+    def _is_museplayer_playback_stats(payload: dict) -> bool:
+        """检测是否为 MusePlayer playback_stats.json 格式。"""
+        if payload.get("schema"):
+            return False
+        tracks = payload.get("tracks")
+        if not isinstance(tracks, dict) or not tracks:
+            return False
+        first = next(iter(tracks.values()))
+        return isinstance(first, dict) and ("play_count" in first or "played_seconds_total" in first)
+
+    @staticmethod
+    def _convert_museplayer_playback_stats(payload: dict, file_path: str) -> dict:
+        """将 MusePlayer playback_stats.json 转换为 MuseArc 内部格式。"""
+        tracks_dict = payload.get("tracks", {})
+        tracks_list: list[dict] = []
+        for _key, entry in tracks_dict.items():
+            if not isinstance(entry, dict):
+                continue
+            tracks_list.append({
+                "track_id": str(entry.get("track_id", "") or "").strip(),
+                "stats": {
+                    "play_count": entry.get("play_count", 0),
+                    "manual_play_count": entry.get("active_play_count", 0),
+                    "play_seconds": int(entry.get("played_seconds_total", 0) or 0),
+                    "early_skip_count": entry.get("early_skip_count", 0),
+                },
+            })
+        content_hash = hashlib.sha256(
+            json.dumps(tracks_list, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()[:16]
+        return {
+            "schema": "musearc_playlist_export_v1",
+            "playlist_hash": f"museplayer_stats_{content_hash}",
+            "playlist_name": Path(file_path).stem,
+            "tracks": tracks_list,
+        }
+
     def import_playlist_stats(self, file_path: str) -> dict:
         """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1aimport_playlist_stats\u3002"""
         path = Path(file_path).expanduser().resolve()
@@ -375,7 +413,13 @@ class FacadeImportExportMixin:
         if not isinstance(payload, dict):
             raise ValueError("invalid_stats_payload")
         schema = str(payload.get("schema", "") or "")
-        if schema != "musearc_playlist_export_v1":
+        if schema == "musearc_playlist_export_v1":
+            print(f"[import_playlist_stats] 检测到 MuseArc 原生格式 schema={schema}")
+        elif self._is_museplayer_playback_stats(payload):
+            print(f"[import_playlist_stats] 检测到 MusePlayer playback_stats 格式，正在转换...")
+            payload = self._convert_museplayer_playback_stats(payload, file_path)
+            print(f"[import_playlist_stats] 转换完成: playlist_hash={payload.get('playlist_hash')}, tracks数={len(payload.get('tracks', []))}")
+        else:
             raise ValueError(f"unsupported_schema:{schema}")
         playlist_hash = str(payload.get("playlist_hash", "") or "").strip()
         if not playlist_hash:
@@ -383,6 +427,7 @@ class FacadeImportExportMixin:
         tracks_raw = payload.get("tracks")
         if not isinstance(tracks_raw, list):
             tracks_raw = []
+        print(f"[import_playlist_stats] playlist_hash={playlist_hash}, tracks数={len(tracks_raw)}")
 
         with self.ctx.db.session() as conn:
             from musearc.infra.db.repositories import LibraryRepository
@@ -395,6 +440,7 @@ class FacadeImportExportMixin:
 
             state = self._load_stats_state()
             history = [r for r in state.get("history", []) if isinstance(r, dict)]
+            playlist_import_history = [r for r in state.get("playlist_import_history", []) if isinstance(r, dict)]
             contributions = state.get("contributions")
             if not isinstance(contributions, dict):
                 contributions = {}
@@ -412,6 +458,7 @@ class FacadeImportExportMixin:
             applied = 0
             skipped = 0
             imported_track_ids: set[str] = set()
+            print(f"[import_playlist_stats] 开始匹配: 库内歌曲={len(all_rows)}, 待匹配tracks={len(tracks_raw)}")
             for item in tracks_raw:
                 if not isinstance(item, dict):
                     skipped += 1
@@ -424,9 +471,13 @@ class FacadeImportExportMixin:
                     row = by_sha.get(source_sha256)
                 if row is None and tid:
                     row = by_id.get(tid)
+                    # 兼容 MusePlayer 的纯 UUID 格式 track_id
+                    if row is None and not tid.startswith("trk_"):
+                        row = by_id.get(f"trk_{tid}")
                 if row is None and storage_rel:
                     row = by_storage.get(storage_rel)
                 if row is None:
+                    print(f"[import_playlist_stats] 跳过(未匹配): tid={tid}, sha256={source_sha256[:16] if source_sha256 else 'N/A'}, storage={storage_rel or 'N/A'}")
                     skipped += 1
                     continue
                 real_tid = str(row.get("track_id", "") or "")
@@ -693,7 +744,7 @@ class FacadeImportExportMixin:
             if not isinstance(contributions, dict):
                 contributions = {}
             playlist_import_history = [r for r in state.get("playlist_import_history", []) if isinstance(r, dict)]
-            playlist_history = [r for r in state.get("playlist_import_history", []) if isinstance(r, dict)]
+            playlist_history = playlist_import_history
 
             source_norm = self._norm_path_for_compare(path)
             playlist_history = [
