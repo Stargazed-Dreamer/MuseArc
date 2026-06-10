@@ -1,9 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 import re
 
-from PySide6.QtCore import QModelIndex, Qt, QThread, Signal
+from PySide6.QtCore import QModelIndex, QObject, Qt, QThread, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -27,6 +27,24 @@ from PySide6.QtWidgets import (
 from musearc.app.facade import MuseArcFacade
 from musearc.ui.import_worker import ImportWorker
 from musearc.ui.table_models import ColumnDef, DictTableModel
+
+
+class _HistoryLoadWorker(QObject):
+    """子线程加载导入历史数据，避免阻塞主线程。"""
+    finished = Signal(list, list, list)  # import_rows, stats_rows, playlist_rows
+
+    def __init__(self, facade: MuseArcFacade):
+        super().__init__()
+        self.facade = facade
+
+    def run(self) -> None:
+        try:
+            import_rows = self.facade.list_import_batches(limit=1000)
+            stats_rows = self.facade.list_stats_import_history(limit=500)
+            playlist_rows = self.facade.list_playlist_import_history(limit=500)
+            self.finished.emit(import_rows, stats_rows, playlist_rows)
+        except Exception:
+            self.finished.emit([], [], [])
 
 
 def _apply_button_scale(button: QPushButton, scale: float) -> None:
@@ -256,6 +274,8 @@ class ImportManagementPage(QWidget):
         self._detail_dialog: ImportTaskDetailDialog | None = None
         self._heavy_modal: QProgressDialog | None = None
         self._heavy_modal_threshold = 40
+        self._history_thread: QThread | None = None
+        self._history_worker: _HistoryLoadWorker | None = None
 
         root = QVBoxLayout(self)
 
@@ -410,15 +430,30 @@ class ImportManagementPage(QWidget):
         self._refresh_queue_view()
 
     def reload_history(self) -> None:
-        rows = self.facade.list_import_batches(limit=1000)
-        self.history_model.set_rows(rows)
-        self.reload_stats_history()
+        # 如果已有历史加载线程在运行，跳过
+        if self._history_thread is not None and self._history_thread.isRunning():
+            return
+        self._history_thread = QThread(self)
+        self._history_worker = _HistoryLoadWorker(self.facade)
+        self._history_worker.moveToThread(self._history_thread)
+        self._history_thread.started.connect(self._history_worker.run)
+        self._history_worker.finished.connect(self._on_history_loaded)
+        self._history_worker.finished.connect(self._history_thread.quit)
+        self._history_thread.finished.connect(self._cleanup_history_worker)
+        self._history_thread.start()
 
-    def reload_stats_history(self) -> None:
-        rows = self.facade.list_stats_import_history(limit=500)
-        self.stats_model.set_rows(rows)
-        playlist_rows = self.facade.list_playlist_import_history(limit=500)
+    def _on_history_loaded(self, import_rows: list, stats_rows: list, playlist_rows: list) -> None:
+        self.history_model.set_rows(import_rows)
+        self.stats_model.set_rows(stats_rows)
         self.playlist_import_model.set_rows(playlist_rows)
+
+    def _cleanup_history_worker(self) -> None:
+        if self._history_worker is not None:
+            self._history_worker.deleteLater()
+            self._history_worker = None
+        if self._history_thread is not None:
+            self._history_thread.deleteLater()
+            self._history_thread = None
 
     def _ensure_detail_dialog(self) -> ImportTaskDetailDialog:
         if self._detail_dialog is None:
@@ -495,7 +530,7 @@ class ImportManagementPage(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "导入统计数据", str(exc))
             return
-        self.reload_stats_history()
+        self.reload_history()
         self.library_changed.emit()
         QMessageBox.information(
             self,
@@ -540,7 +575,7 @@ class ImportManagementPage(QWidget):
             QMessageBox.warning(self, "导入歌单", str(exc))
             return
 
-        self.reload_stats_history()
+        self.reload_history()
         self.library_changed.emit()
         QMessageBox.information(
             self,
@@ -588,7 +623,7 @@ class ImportManagementPage(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "取消导入", str(exc))
             return
-        self.reload_stats_history()
+        self.reload_history()
         self.library_changed.emit()
         QMessageBox.information(
             self,
@@ -706,10 +741,22 @@ class ImportManagementPage(QWidget):
         merged_payload = dict(payload)
         prev_payload = self._last_progress_payload or {}
         raw_states = merged_payload.get("file_states", None)
-        if (not isinstance(raw_states, list) or not raw_states) and isinstance(prev_payload.get("file_states"), list):
+        if not isinstance(raw_states, list) or not raw_states:
+            # 增量模式下空列表表示"无变化"，保留上次的全量数据
+            if isinstance(prev_payload.get("file_states"), list):
+                merged_payload["file_states"] = prev_payload.get("file_states") or []
+        else:
+            # 有数据：检查是否为增量更新（行数远小于上次全量）
             prev_states = prev_payload.get("file_states") or []
-            if prev_states:
-                merged_payload["file_states"] = prev_states
+            if isinstance(prev_states, list) and len(raw_states) < len(prev_states) and len(prev_states) > 10:
+                # 增量合并：用 relpath 为主键合并
+                prev_by_rel = {str(s.get("relpath", "")): s for s in prev_states if isinstance(s, dict)}
+                for row in raw_states:
+                    if isinstance(row, dict):
+                        rel = str(row.get("relpath", ""))
+                        if rel:
+                            prev_by_rel[rel] = row
+                merged_payload["file_states"] = list(prev_by_rel.values())
         self._last_progress_payload = merged_payload
         scanned = _safe_int(payload.get("scanned_files", 0), 0)
         processed = _safe_int(payload.get("processed_files", 0), 0)

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """\u5bfc\u5165\u6d41\u7a0b\u7ba1\u7ebf\u3002
 
@@ -57,8 +57,8 @@ def run_import_path(
     resume: bool = True,
 ) -> ImportReport:
     """\u6267\u884c\u5bfc\u5165\u4e3b\u6d41\u7a0b\uff08\u626b\u63cf\u3001\u53bb\u91cd\u3001\u5165\u5e93\u3001\u5339\u914d\u3001\u5ba1\u67e5\u3001\u65ad\u70b9\u6062\u590d\uff09\u3002"""
-    state_save_every_files = 25
-    state_save_every_seconds = 1.5
+    state_save_every_files = 5
+    state_save_every_seconds = 0.8
     source_path = source_path.resolve()
     state_file = resume_state_path(service.library_root, source_path)
     state = load_resume_state(state_file) if resume else None
@@ -156,6 +156,7 @@ def run_import_path(
         row["status_code"] = "processing"
         row["status"] = f"处理中-{step}"
         row["reason"] = step
+        dirty_file_state_keys.add(relpath)
 
     def set_archived(relpath: str) -> None:
         """\u5c06\u6587\u4ef6\u72b6\u6001\u6807\u8bb0\u4e3a\u5df2\u5f52\u6863\u3002"""
@@ -165,6 +166,7 @@ def run_import_path(
         row["status_code"] = "archived"
         row["status"] = "已归档"
         row["reason"] = ""
+        dirty_file_state_keys.add(relpath)
 
     def set_review(relpath: str, reason: str) -> None:
         """\u5c06\u6587\u4ef6\u72b6\u6001\u6807\u8bb0\u4e3a\u5f85\u5ba1\u67e5\u5e76\u8bb0\u5f55\u539f\u56e0\u3002"""
@@ -175,6 +177,7 @@ def run_import_path(
         row["status_code"] = "review"
         row["status"] = f"待审查-{text}"
         row["reason"] = text
+        dirty_file_state_keys.add(relpath)
 
     def set_skipped(relpath: str, reason: str, *, source_path: Path | None = None) -> None:
         """\u5c06\u6587\u4ef6\u72b6\u6001\u6807\u8bb0\u4e3a\u5df2\u8df3\u8fc7\u5e76\u53ef\u767b\u8bb0\u8def\u5f84\u7d22\u5f15\u3002"""
@@ -186,6 +189,7 @@ def run_import_path(
         row["status_code"] = "skipped"
         row["status"] = f"已跳过-{text}"
         row["reason"] = text
+        dirty_file_state_keys.add(relpath)
         if source_path is None:
             return
         key = _normalize_source_path_key(source_path)
@@ -462,6 +466,7 @@ def run_import_path(
 
     last_emit_ts = 0.0
     last_file_states_emit_ts = -9999.0
+    dirty_file_state_keys: set[str] = set()
 
     def emit(stage: str, current_file: str = "", force: bool = False, paused: bool = False) -> None:
         """\u8282\u6d41\u63a8\u9001\u5bfc\u5165\u8fdb\u5ea6\u4e8b\u4ef6\u3002"""
@@ -472,9 +477,16 @@ def run_import_path(
         if not force and now - last_emit_ts < 0.2:
             return
         last_emit_ts = now
-        include_file_states = bool(force or paused or (now - last_file_states_emit_ts >= 5.0))
+        include_file_states = bool(force or paused or (now - last_file_states_emit_ts >= 10.0))
         if include_file_states:
             last_file_states_emit_ts = now
+            file_states_payload: list[dict] = snapshot_file_states()
+            dirty_file_state_keys.clear()
+        elif dirty_file_state_keys:
+            file_states_payload = [dict(file_state_map[k]) for k in sorted(dirty_file_state_keys) if k in file_state_map]
+            dirty_file_state_keys.clear()
+        else:
+            file_states_payload = []
         progress_callback(
             ImportProgress(
                 import_batch_id=state.import_batch_id,
@@ -491,7 +503,7 @@ def run_import_path(
                 errors=len(state.errors),
                 resumed=resumed,
                 paused=paused,
-                file_states=snapshot_file_states() if include_file_states else [],
+                file_states=file_states_payload,
             )
         )
 
@@ -564,6 +576,7 @@ def run_import_path(
             )
             fp_payload = service.dependencies.fingerprint.encode_vector(fp.vector)
             fp_digest = str(fp.digest or "").strip().lower()
+            fp_hash32 = service.dependencies.fingerprint.fingerprint_hash32(fp_payload)
             if fp_digest and fp_digest in pending_audio_fp_digests:
                 state.duplicate_tracks += 1
                 set_skipped(relpath, "音频指纹已在待审查队列", source_path=candidate.path)
@@ -580,6 +593,7 @@ def run_import_path(
                 new_artist=artist,
                 new_duration_sec=probe.duration_sec,
                 new_source_ext=candidate.ext,
+                new_hash32=fp_hash32,
                 candidates=dedupe_candidates,
             )
 
@@ -692,6 +706,7 @@ def run_import_path(
                 file_health=FileHealth.OK,
                 fingerprint_version=fp.version,
                 fingerprint_digest=fp.digest,
+                fingerprint_hash32=fp_hash32,
                 fingerprint_payload=fp_payload,
                 imported_at=_utc_now(),
                 ext_json=new_ext_payload,
@@ -761,7 +776,21 @@ def run_import_path(
                         track_row.ext_json = merged_new_ext
 
             state.imported_tracks += 1
-            duplicate_candidates_cache.clear()
+            # 增量更新缓存：将新曲目加入对应时长桶，而非清空整个缓存
+            _dur_key = (int(round(float(probe.duration_sec) * 10.0)), int(round(6.0 * 10.0)))
+            _new_cand = {
+                "track_id": track_id,
+                "title": title,
+                "artist": artist,
+                "duration_sec": probe.duration_sec,
+                "quality_score": quality,
+                "fingerprint_payload": fp_payload,
+                "fingerprint_hash32": fp_hash32,
+                "source_ext": candidate.ext,
+                "storage_format": ext_no_dot,
+            }
+            for _bk, _bv in duplicate_candidates_cache.items():
+                _bv.append(_new_cand)
             existing_source_path_keys.add(source_path_key)
             state.created_track_ids.append(track_id)
             state.created_storage_relpaths.append(storage_rel)

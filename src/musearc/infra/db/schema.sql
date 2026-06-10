@@ -1,4 +1,4 @@
-﻿PRAGMA foreign_keys = ON;
+PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS library_meta (
   key TEXT PRIMARY KEY,
@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS tracks (
   file_health TEXT NOT NULL,
   fingerprint_version INTEGER NOT NULL,
   fingerprint_digest TEXT NOT NULL,
+  fingerprint_hash32 INTEGER,
   fingerprint_payload TEXT NOT NULL,
   imported_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -53,6 +54,7 @@ CREATE TABLE IF NOT EXISTS tracks (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_sha ON tracks(source_sha256);
 CREATE INDEX IF NOT EXISTS idx_tracks_duration ON tracks(duration_sec);
 CREATE INDEX IF NOT EXISTS idx_tracks_fp_digest ON tracks(fingerprint_digest);
+CREATE INDEX IF NOT EXISTS idx_tracks_fp_hash32 ON tracks(fingerprint_hash32);
 CREATE INDEX IF NOT EXISTS idx_tracks_search ON tracks(title, artist, album);
 CREATE INDEX IF NOT EXISTS idx_tracks_source_fullpath ON tracks(source_fullpath);
 

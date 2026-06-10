@@ -22,6 +22,7 @@ class RepositoryTracksLyricsMixin:
         ext_payload = data.pop("ext_json", {})
         if not isinstance(ext_payload, dict):
             ext_payload = {}
+        fp_hash32 = data.pop("fingerprint_hash32", None)
         values = (
             data["track_id"],
             data["file_name"],
@@ -46,6 +47,7 @@ class RepositoryTracksLyricsMixin:
             str(data["file_health"]),
             data["fingerprint_version"],
             data["fingerprint_digest"],
+            fp_hash32,
             data["fingerprint_payload"],
             imported_at,
             imported_at,
@@ -58,9 +60,9 @@ class RepositoryTracksLyricsMixin:
               kind, duration_sec, sample_rate, channels, bit_rate, quality_score,
               storage_relpath, source_relpath, source_fullpath, source_sha256, source_ext,
               probe_codec, file_health, fingerprint_version, fingerprint_digest,
-              fingerprint_payload, imported_at, updated_at, ext_json
+              fingerprint_hash32, fingerprint_payload, imported_at, updated_at, ext_json
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             values,
         )
@@ -772,10 +774,11 @@ class RepositoryTracksLyricsMixin:
         return updated
 
     def find_duplicate_candidates(self, duration_sec: float, tolerance_sec: float = 6.0) -> list[dict]:
-        """\u4ed3\u50a8\u65b9\u6cd5\uff1afind_duplicate_candidates\u3002"""
+        """仓储方法：find_duplicate_candidates。"""
         rows = self.conn.execute(
             """
-            SELECT track_id, title, artist, duration_sec, quality_score, fingerprint_payload, source_ext, storage_format
+            SELECT track_id, title, artist, duration_sec, quality_score, fingerprint_payload,
+                   fingerprint_hash32, source_ext, storage_format
             FROM tracks
             WHERE deleted_at IS NULL
               AND duration_sec BETWEEN ? AND ?

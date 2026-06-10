@@ -48,6 +48,7 @@ class DuplicateEvaluator:
         new_artist: str | None = None,
         new_duration_sec: float | None = None,
         new_source_ext: str | None = None,
+        new_hash32: int | None = None,
         candidates: list[dict],
     ) -> DuplicateDecisionResult:
         def _norm_threshold(value: float | int | None, fallback: float) -> float:
@@ -121,18 +122,46 @@ class DuplicateEvaluator:
         workers = self._resolve_workers()
         threshold = max(1, int(self.parallel_threshold or 1))
 
-        if workers > 1 and len(candidates) >= threshold:
+        # hash32 汉明距离预筛：大幅减少需要精确比对的候选数
+        _HASH32_HD_LIMIT = 14  # 汉明距离超过此值的几乎不可能相似
+        filtered_candidates = candidates
+        if new_hash32 is not None and candidates:
+            ranked_by_hash: list[tuple[int, dict]] = []
+            no_hash: list[dict] = []
+            for cand in candidates:
+                cand_hash = cand.get("fingerprint_hash32")
+                if not isinstance(cand_hash, int):
+                    no_hash.append(cand)
+                    continue
+                hd = (int(new_hash32) ^ int(cand_hash)).bit_count()
+                if hd <= _HASH32_HD_LIMIT:
+                    ranked_by_hash.append((hd, cand))
+            if ranked_by_hash:
+                ranked_by_hash.sort(key=lambda item: item[0])
+                # 保留汉明距离最小的 top-K，同时保留无 hash32 的少量候选
+                filtered_candidates = [cand for _, cand in ranked_by_hash[:48]]
+                if no_hash:
+                    existing_ids = {str(c.get("track_id", "")) for c in filtered_candidates}
+                    for cand in no_hash[:8]:
+                        tid = str(cand.get("track_id", ""))
+                        if tid and tid not in existing_ids:
+                            filtered_candidates.append(cand)
+            # 如果 hash32 预筛后无候选，保留无 hash32 的候选
+            elif no_hash:
+                filtered_candidates = no_hash
+
+        if workers > 1 and len(filtered_candidates) >= threshold:
             with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="dup-compare") as pool:
                 scores = pool.map(
                     lambda row: self.fp_engine.similarity(new_payload, row["fingerprint_payload"]),
-                    candidates,
+                    filtered_candidates,
                 )
-                for candidate, score in zip(candidates, scores):
+                for candidate, score in zip(filtered_candidates, scores):
                     if score > best_score:
                         best_score = score
                         best_candidate = candidate
         else:
-            for candidate in candidates:
+            for candidate in filtered_candidates:
                 score = self.fp_engine.similarity(new_payload, candidate["fingerprint_payload"])
                 if score > best_score:
                     best_score = score

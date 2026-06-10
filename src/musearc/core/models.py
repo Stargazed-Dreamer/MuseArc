@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -68,6 +68,7 @@ class TrackInsert:
     fingerprint_payload: str
     imported_at: datetime
     ext_json: dict[str, Any] = field(default_factory=dict)
+    fingerprint_hash32: int | None = None
 
 
 @dataclass(slots=True)

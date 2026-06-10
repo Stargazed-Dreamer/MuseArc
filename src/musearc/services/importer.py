@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """\u5bfc\u5165\u670d\u52a1\u3002
 
@@ -806,6 +806,7 @@ class ImportService:
             file_size,
         )
         fp_payload = self.dependencies.fingerprint.encode_vector(fp.vector)
+        fp_hash32 = self.dependencies.fingerprint.fingerprint_hash32(fp_payload)
         ext_payload = _build_track_ext_payload(probe)
         source_sha = sha256_file(source)
 
@@ -844,6 +845,7 @@ class ImportService:
             file_health=FileHealth.OK,
             fingerprint_version=fp.version,
             fingerprint_digest=fp.digest,
+            fingerprint_hash32=fp_hash32,
             fingerprint_payload=fp_payload,
             imported_at=_utc_now(),
             ext_json=ext_payload,

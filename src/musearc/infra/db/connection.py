@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
@@ -97,6 +97,7 @@ class DbManager:
         add_column_if_missing("lyrics", "lyrics_author TEXT NOT NULL DEFAULT ''", "lyrics_author")
         add_column_if_missing("lyrics", "line_count INTEGER NOT NULL DEFAULT 0", "line_count")
         add_column_if_missing("lyrics", "deleted_at TEXT", "deleted_at")
+        add_column_if_missing("tracks", "fingerprint_hash32 INTEGER", "fingerprint_hash32")
 
         if table_exists("playlist_items"):
             conn.execute("UPDATE playlist_items SET entry = position WHERE entry < 0")
