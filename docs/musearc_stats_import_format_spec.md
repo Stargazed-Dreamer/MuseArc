@@ -30,8 +30,11 @@
       "stats": {
         "play_count": 11,
         "manual_play_count": 3,
+        "complete_play_count": 8,
         "play_seconds": 116,
-        "early_skip_count": 0
+        "early_skip_count": 0,
+        "peak_session_play_count": 5,
+        "peak_session_play_at": 1781375020.0
       }
     }
   ]
@@ -89,8 +92,11 @@ MuseArc 按以下顺序尝试将 tracks[i] 匹配到库内歌曲：
 |------|------|------|------|
 | `play_count` | int | **是** | 总播放次数（含随机播放和手动播放） |
 | `manual_play_count` | int | **是** | 用户主动选择播放的次数（非随机播放触发） |
+| `complete_play_count` | int | 否 | 完播次数（播放进度达到95%以上时+1） |
 | `play_seconds` | int | **是** | 累计播放秒数（整数，向下取整） |
 | `early_skip_count` | int | **是** | 早期跳过次数（播放进度不足5%就跳过的次数） |
+| `peak_session_play_count` | int | 否 | 历史最高密集播放次数（单次启动期间最高播放次数） |
+| `peak_session_play_at` | float | 否 | 历史最高密集播放次数的记录时间戳（Unix epoch 秒） |
 
 ### 字段映射参考（MusePlayer → MuseArc）
 
@@ -98,8 +104,11 @@ MuseArc 按以下顺序尝试将 tracks[i] 匹配到库内歌曲：
 |-----------------|-------------|---------|
 | `play_count` | `stats.play_count` | 直接映射 |
 | `active_play_count` | `stats.manual_play_count` | 语义对应：主动播放次数 |
+| `complete_play_count` | `stats.complete_play_count` | 直接映射：完播次数 |
 | `played_seconds_total` | `stats.play_seconds` | 浮点→整数，`int(played_seconds_total)` |
 | `early_skip_count` | `stats.early_skip_count` | 直接映射 |
+| `peak_session_play_count` | `stats.peak_session_play_count` | 直接映射 |
+| `peak_session_play_at` | `stats.peak_session_play_at` | 直接映射 |
 | `played_percent_total` | *(无对应)* | MuseArc 不使用此字段，可忽略 |
 | `updated_at` | *(无对应)* | MuseArc 不使用此字段，可忽略 |
 
@@ -142,8 +151,11 @@ MuseArc 按以下顺序尝试将 tracks[i] 匹配到库内歌曲：
       "stats": {
         "play_count": 11,
         "manual_play_count": 3,
+        "complete_play_count": 8,
         "play_seconds": 116,
-        "early_skip_count": 0
+        "early_skip_count": 0,
+        "peak_session_play_count": 5,
+        "peak_session_play_at": 1781375020.0
       }
     },
     {
@@ -152,8 +164,11 @@ MuseArc 按以下顺序尝试将 tracks[i] 匹配到库内歌曲：
       "stats": {
         "play_count": 4,
         "manual_play_count": 1,
+        "complete_play_count": 2,
         "play_seconds": 60,
-        "early_skip_count": 2
+        "early_skip_count": 2,
+        "peak_session_play_count": 3,
+        "peak_session_play_at": 1781375020.0
       }
     }
   ]
@@ -170,9 +185,12 @@ MuseArc 按以下顺序尝试将 tracks[i] 匹配到库内歌曲：
 |--------|------|------|
 | `播放次数` | 所有来源 `play_count` 之和 | 累加不同 playlist_hash 的贡献 |
 | `指定播放次数` | 所有来源 `manual_play_count` 之和 | 同上 |
+| `完播次数` | 所有来源 `complete_play_count` 之和 | 同上 |
 | `播放秒数` | 所有来源 `play_seconds` 之和 | 同上 |
 | `早期跳过次数` | 所有来源 `early_skip_count` 之和 | 同上 |
-| `喜爱程度` | 公式计算 | -100~100 整数，基于上述四项统计综合计算 |
+| `最高密集播放次数` | 所有来源 `peak_session_play_count` 最大值 | 取最大值（非累加） |
+| `最高密集播放时间` | 对应 `peak_session_play_at` | 与最高密集播放次数同来源 |
+| `喜爱程度` | 公式计算 | -100~100 整数，基于上述统计综合计算 |
 
 ### 喜爱程度计算公式
 
@@ -183,13 +201,20 @@ c = play_seconds
 d = early_skip_count
 e = 全库总播放次数（所有歌曲 a 求和）
 f = 歌曲长度秒数
+g = complete_play_count
+h = peak_session_play_count
 
-t1 = c / f / a        (平均每次播放完整度)
+t1 = c / f / a        (平均每次播放完整度，近似值)
+t1b = g / a           (完播率，直接测量，有数据时参与)
 t2 = b / a            (主动播放占比)
 t3 = a / e            (相对播放频次)
 t4 = d / a            (早期跳过占比)
+t5 = min(h / a, 1.0)  (密集播放信号，单次会话重复播放越多越喜欢)
 
-t = 0.1*t3 + 0.4*t1 + 0.5*t2 - t4
+有完播数据时:
+  t = 0.1*t3 + 0.2*t1 + 0.2*t1b + 0.4*t2 + 0.1*t5 - t4
+无完播数据时:
+  t = 0.1*t3 + 0.4*t1 + 0.4*t2 + 0.1*t5 - t4
 喜爱程度 = clamp(round(t * 100), -100, 100)
 ```
 

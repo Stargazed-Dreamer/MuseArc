@@ -111,23 +111,38 @@ class MuseArcFacade(FacadeImportExportMixin, FacadeLibraryMixin, FacadeRuntimeMi
         early_skip_count: int,
         total_play_count_all: int,
         duration_sec: float,
+        complete_play_count: int = 0,
+        peak_session_play_count: int = 0,
     ) -> int:
-        """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1a_compute_love_score\u3002"""
+        """Facade 方法：_compute_love_score。"""
         a = max(0, int(play_count))
         b = max(0, int(manual_play_count))
         c = max(0, int(play_seconds))
         d = max(0, int(early_skip_count))
         e = max(1, int(total_play_count_all))
         f = max(1.0, float(duration_sec or 0.0))
+        g = max(0, int(complete_play_count))
+        h = max(0, int(peak_session_play_count))
         a_safe = max(1, a)
 
-        # 平均播放比例 0.4
+        # 平均播放完整度 0.2（基于播放秒数/时长/次数的近似）
         t1 = float(c) / f / float(a_safe)
-        # 主动播放比例 0.5
+        # 完播率 0.2（直接测量，有数据时参与，无数据时不计入）
+        if g > 0:
+            t1b = float(g) / float(a_safe)
+        else:
+            t1b = 0.0
+        # 主动播放比例 0.4
         t2 = float(b) / float(a_safe)
         # 全库播放占比 0.1
         t3 = float(a) / float(e)
         # 跳过比例 -1
         t4 = float(d) / float(a_safe)
-        t = 0.1 * t3 + 0.4 * t1 + 0.5 * t2 - t4
+        # 密集播放信号 0.1：单次会话中重复播放越多说明越喜欢
+        t5 = min(float(h) / float(a_safe), 1.0) if h > 0 else 0.0
+        # 有完播数据时 t1 权重让出 0.2 给 t1b，无完播数据时 t1 保持 0.4
+        if g > 0:
+            t = 0.1 * t3 + 0.2 * t1 + 0.2 * t1b + 0.4 * t2 + 0.1 * t5 - t4
+        else:
+            t = 0.1 * t3 + 0.4 * t1 + 0.4 * t2 + 0.1 * t5 - t4
         return max(-100, min(100, int(round(t * 100.0))))

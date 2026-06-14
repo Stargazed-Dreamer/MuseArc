@@ -5,3 +5,12 @@ test*
 /*tmp*/
 .build/
 *参考
+
+# Agent 配置（含密钥）
+config.toml
+
+# 运行时临时文件
+temp/
+
+# 记忆存储
+memory/

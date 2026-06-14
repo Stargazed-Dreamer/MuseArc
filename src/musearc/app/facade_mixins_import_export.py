@@ -392,8 +392,11 @@ class FacadeImportExportMixin:
                 "stats": {
                     "play_count": entry.get("play_count", 0),
                     "manual_play_count": entry.get("active_play_count", 0),
+                    "complete_play_count": entry.get("complete_play_count", 0),
                     "play_seconds": int(entry.get("played_seconds_total", 0) or 0),
                     "early_skip_count": entry.get("early_skip_count", 0),
+                    "peak_session_play_count": entry.get("peak_session_play_count", 0),
+                    "peak_session_play_at": entry.get("peak_session_play_at", 0.0),
                 },
             })
         content_hash = hashlib.sha256(
@@ -489,6 +492,9 @@ class FacadeImportExportMixin:
                     "manual_play_count": self._safe_nonneg_int(stats.get("manual_play_count", 0), 0),
                     "play_seconds": self._safe_nonneg_int(stats.get("play_seconds", 0), 0),
                     "early_skip_count": self._safe_nonneg_int(stats.get("early_skip_count", 0), 0),
+                    "complete_play_count": self._safe_nonneg_int(stats.get("complete_play_count", 0), 0),
+                    "peak_session_play_count": self._safe_nonneg_int(stats.get("peak_session_play_count", 0), 0),
+                    "peak_session_play_at": stats.get("peak_session_play_at", 0.0),
                 }
                 track_map = contributions.get(real_tid)
                 if not isinstance(track_map, dict):
@@ -565,7 +571,7 @@ class FacadeImportExportMixin:
             row_map = contributions.get(tid)
             if not isinstance(row_map, dict):
                 row_map = {}
-            total = {"play_count": 0, "manual_play_count": 0, "play_seconds": 0, "early_skip_count": 0}
+            total = {"play_count": 0, "manual_play_count": 0, "play_seconds": 0, "early_skip_count": 0, "complete_play_count": 0, "peak_session_play_count": 0, "peak_session_play_at": 0.0}
             for item in row_map.values():
                 if not isinstance(item, dict):
                     continue
@@ -573,6 +579,12 @@ class FacadeImportExportMixin:
                 total["manual_play_count"] += self._safe_nonneg_int(item.get("manual_play_count", 0), 0)
                 total["play_seconds"] += self._safe_nonneg_int(item.get("play_seconds", 0), 0)
                 total["early_skip_count"] += self._safe_nonneg_int(item.get("early_skip_count", 0), 0)
+                total["complete_play_count"] += self._safe_nonneg_int(item.get("complete_play_count", 0), 0)
+                # peak_session_play_count 取各来源最大值（非累加）
+                item_peak = self._safe_nonneg_int(item.get("peak_session_play_count", 0), 0)
+                if item_peak > total["peak_session_play_count"]:
+                    total["peak_session_play_count"] = item_peak
+                    total["peak_session_play_at"] = item.get("peak_session_play_at", 0.0)
 
             duration_sec = 0.0
             row = by_id.get(tid)
@@ -588,11 +600,17 @@ class FacadeImportExportMixin:
                 early_skip_count=total["early_skip_count"],
                 total_play_count_all=total_play_count_all,
                 duration_sec=duration_sec,
+                complete_play_count=total["complete_play_count"],
+                peak_session_play_count=total["peak_session_play_count"],
             )
             repo.update_track_tag_values([tid], "播放次数", str(total["play_count"]))
             repo.update_track_tag_values([tid], "指定播放次数", str(total["manual_play_count"]))
             repo.update_track_tag_values([tid], "播放秒数", str(total["play_seconds"]))
             repo.update_track_tag_values([tid], "早期跳过次数", str(total["early_skip_count"]))
+            repo.update_track_tag_values([tid], "完播次数", str(total["complete_play_count"]))
+            repo.update_track_tag_values([tid], "最高密集播放次数", str(total["peak_session_play_count"]))
+            if total["peak_session_play_at"]:
+                repo.update_track_tag_values([tid], "最高密集播放时间", str(total["peak_session_play_at"]))
             repo.update_track_tag_values([tid], "喜爱程度", str(love_score))
 
     def revert_playlist_stats_import(self, playlist_hash: str) -> dict:
@@ -826,6 +844,8 @@ class FacadeImportExportMixin:
                 manual_play_count = self._safe_nonneg_int(tags.get("指定播放次数", 0), 0)
                 play_seconds = self._safe_nonneg_int(tags.get("播放秒数", 0), 0)
                 early_skip_count = self._safe_nonneg_int(tags.get("早期跳过次数", 0), 0)
+                complete_play_count = self._safe_nonneg_int(tags.get("完播次数", 0), 0)
+                peak_session_play_count = self._safe_nonneg_int(tags.get("最高密集播放次数", 0), 0)
                 try:
                     duration_sec = float(row.get("duration_sec", 0.0) or 0.0)
                 except Exception:
@@ -837,6 +857,8 @@ class FacadeImportExportMixin:
                     early_skip_count=early_skip_count,
                     total_play_count_all=total_play_count_all,
                     duration_sec=duration_sec,
+                    complete_play_count=complete_play_count,
+                    peak_session_play_count=peak_session_play_count,
                 )
                 repo.update_track_tag_values([track_id], "喜爱程度", str(love_score))
                 updated += 1
