@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterable
 from datetime import datetime
 
@@ -10,6 +11,8 @@ from musearc.infra.db.repositories_common import (
     _placeholders,
     _utc_now_iso,
 )
+
+logger = logging.getLogger(__name__)
 
 class RepositoryMetaImportMixin:
     """Repository mixin: tag/meta/import-batch operations."""
@@ -98,6 +101,8 @@ class RepositoryMetaImportMixin:
                 (json.dumps(payload, ensure_ascii=False), _utc_now_iso(), row["track_id"]),
             )
             updated += 1
+        logger.info("[Repo] update_track_tag_values: ids=%s tag=%s val=%r updated=%d", ids, name, cleaned, updated)
+        print(f"[repo] update_track_tag_values: ids={ids} tag={name} val={cleaned!r} updated={updated}")
         return updated
 
     def set_meta(self, key: str, value: str) -> None:

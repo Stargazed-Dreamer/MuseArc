@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
+import logging
 import re
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 
 from musearc.core.pinyin import first_letter
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_int_value(value, default: int = 0) -> int:
@@ -257,7 +260,8 @@ class TrackTableModel(QAbstractTableModel):
             return base
         key = self.columns[index.column()][0]
         editable = self._is_editable_key(key, row_obj["track"])
-        return base | Qt.ItemFlag.ItemIsEditable if editable else base
+        result = base | Qt.ItemFlag.ItemIsEditable if editable else base
+        return result
 
     def setData(self, index: QModelIndex, value, role: int = Qt.ItemDataRole.EditRole):
         if role != Qt.ItemDataRole.EditRole or not index.isValid():
@@ -269,10 +273,13 @@ class TrackTableModel(QAbstractTableModel):
         key = self.columns[index.column()][0]
         track = row_obj["track"]
         if not self._is_editable_key(key, track):
+            logger.debug("[TrackTableModel] setData 拒绝: key=%s 不可编辑", key)
             return False
 
         track_id = str(track.get("track_id", ""))
         old_value = self._value_for_key(track, key)
+        logger.info("[TrackTableModel] setData: track_id=%s key=%s old=%r new=%r", track_id, key, old_value, value)
+        print(f"[edit] TrackTableModel.setData: tid={track_id} key={key} old={old_value!r} new={value!r}")
 
         if key == "preference_level":
             try:
@@ -322,7 +329,11 @@ class TrackTableModel(QAbstractTableModel):
         self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
         self._schedule_rebuild()
         if track_id:
+            logger.info("[TrackTableModel] 将发射 track_field_edited: tid=%s key=%s value=%r", track_id, emit_key, emit_value)
+            print(f"[edit] 发射信号: tid={track_id} key={emit_key} value={emit_value!r}")
             QTimer.singleShot(0, lambda tid=track_id, k=emit_key, v=emit_value: self.track_field_edited.emit(tid, k, v))
+        else:
+            logger.warning("[TrackTableModel] setData 完成 but track_id 为空，无法发射信号")
         return True
 
     def set_tracks(self, rows: list[dict]) -> None:
@@ -376,7 +387,8 @@ class TrackTableModel(QAbstractTableModel):
             return
         top = self.index(0, 0)
         bottom = self.index(len(self.display_rows) - 1, len(self.columns) - 1)
-        self.dataChanged.emit(top, bottom)
+        # 仅通知 BackgroundRole 变更，避免全角色 dataChanged 干扰正在编辑的 editor
+        self.dataChanged.emit(top, bottom, [Qt.ItemDataRole.BackgroundRole])
 
     def apply_value_to_tracks(self, track_ids: set[str], key: str, value) -> None:
         ids = {str(v) for v in track_ids if str(v)}

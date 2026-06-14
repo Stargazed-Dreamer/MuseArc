@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterable
 from dataclasses import asdict
 from pathlib import Path
@@ -11,6 +12,8 @@ from musearc.infra.db.repositories_common import (
     _safe_json_loads,
     _utc_now_iso,
 )
+
+logger = logging.getLogger(__name__)
 
 class RepositoryTracksLyricsMixin:
     """Repository mixin: track/lyrics/review persistence operations."""
@@ -224,12 +227,15 @@ class RepositoryTracksLyricsMixin:
                 value = ""
             patch[key] = str(value or "").strip()
         if not patch:
+            logger.debug("[Repo] update_tracks_fields: 过滤后 patch 为空, 原始 fields=%s", list(fields.keys()))
             return 0
 
         set_items = [f"{k} = ?" for k in patch.keys()]
         set_items.append("updated_at = ?")
         placeholders = _placeholders(len(ids))
         params = [*patch.values(), _utc_now_iso(), *ids]
+        logger.info("[Repo] update_tracks_fields: ids=%s patch=%s", ids, list(patch.keys()))
+        print(f"[repo] update_tracks_fields: ids={ids} patch={list(patch.keys())}")
         cursor = self.conn.execute(
             f"""
             UPDATE tracks
@@ -614,6 +620,8 @@ class RepositoryTracksLyricsMixin:
                     (new_rel, row["lyrics_id"]),
                 )
                 updated += int(cursor.rowcount or 0)
+        logger.info("[Repo] update_lyrics_fields: ids=%s fields=%s updated=%d", ids, list(fields.keys()), updated)
+        print(f"[repo] update_lyrics_fields: ids={ids} fields={list(fields.keys())} updated={updated}")
         return updated
 
     def delete_lyrics(self, lyrics_ids: Iterable[str]) -> list[str]:

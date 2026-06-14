@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QHBoxLayout, QInputDialog, QLineEdit, QMenu, QMessageBox, QPushButton, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
 from PySide6.QtGui import QAction
@@ -22,6 +24,8 @@ from musearc.ui.main_window_helpers import (
 )
 from musearc.ui.main_window_pages_common import _queue_play_tracks, _release_player_for_file_ops
 from musearc.ui.long_task import make_chunked_task, run_modal_task
+
+logger = logging.getLogger(__name__)
 
 
 # ?????
@@ -292,7 +296,10 @@ class TracksPage(QWidget):
 
     def on_track_field_edited(self, track_id: str, key: str, value) -> None:
         if not track_id:
+            logger.debug("[TracksPage] on_track_field_edited: track_id 为空，忽略")
             return
+        logger.info("[TracksPage] on_track_field_edited: tid=%s key=%s value=%r", track_id, key, value)
+        print(f"[edit] TracksPage 收到: tid={track_id} key={key} value={value!r}")
         if key == "custom_order":
             return
         if key == "lyrics_file_name":
@@ -307,15 +314,21 @@ class TracksPage(QWidget):
         try:
             if key.startswith("tag:"):
                 tag_name = key.split(":", 1)[1]
+                logger.info("[TracksPage] 调用 facade.update_track_tag_values: tid=%s tag=%s val=%r", track_id, tag_name, value)
                 self.facade.update_track_tag_values([track_id], tag_name, str(value))
             else:
+                logger.info("[TracksPage] 调用 facade.update_tracks_fields: tid=%s key=%s val=%r", track_id, key, value)
                 self.facade.update_tracks_fields([track_id], {key: value})
+            logger.info("[TracksPage] 编辑成功: tid=%s key=%s", track_id, key)
+            print(f"[edit] TracksPage 成功: tid={track_id} key={key}")
         except Exception as exc:
+            logger.error("[TracksPage] 编辑失败: tid=%s key=%s exc=%s", track_id, key, exc)
+            print(f"[edit] TracksPage 失败: tid={track_id} key={key} exc={exc}")
             QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
             QTimer.singleShot(0, self.reload_tracks_from_db)
             return
         for row in self.all_rows:
-            if row.get("track_id") == track_id:
+            if str(row.get("track_id", "")) == str(track_id):
                 if key.startswith("tag:"):
                     tags = dict(row.get("tags", {}) or {})
                     tag_name = key.split(":", 1)[1]
@@ -803,6 +816,8 @@ class PlaylistPage(QWidget):
     def on_track_field_edited(self, track_id: str, key: str, value) -> None:
         if not track_id:
             return
+        logger.info("[PlaylistPage] on_track_field_edited: tid=%s key=%s value=%r", track_id, key, value)
+        print(f"[edit] PlaylistPage 收到: tid={track_id} key={key} value={value!r}")
         if key == "custom_order":
             if not self.current_playlist_id:
                 return
@@ -813,6 +828,7 @@ class PlaylistPage(QWidget):
             try:
                 self.facade.update_playlist_entries(self.current_playlist_id, {track_id: parsed})
             except Exception as exc:
+                logger.error("[PlaylistPage] 编辑 custom_order 失败: tid=%s exc=%s", track_id, exc)
                 QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
                 QTimer.singleShot(0, self.reload_playlist_tracks)
                 return
@@ -831,10 +847,16 @@ class PlaylistPage(QWidget):
         try:
             if key.startswith("tag:"):
                 tag_name = key.split(":", 1)[1]
+                logger.info("[PlaylistPage] 调用 facade.update_track_tag_values: tid=%s tag=%s val=%r", track_id, tag_name, value)
                 self.facade.update_track_tag_values([track_id], tag_name, str(value))
             else:
+                logger.info("[PlaylistPage] 调用 facade.update_tracks_fields: tid=%s key=%s val=%r", track_id, key, value)
                 self.facade.update_tracks_fields([track_id], {key: value})
+            logger.info("[PlaylistPage] 编辑成功: tid=%s key=%s", track_id, key)
+            print(f"[edit] PlaylistPage 成功: tid={track_id} key={key}")
         except Exception as exc:
+            logger.error("[PlaylistPage] 编辑失败: tid=%s key=%s exc=%s", track_id, key, exc)
+            print(f"[edit] PlaylistPage 失败: tid={track_id} key={key} exc={exc}")
             QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
             QTimer.singleShot(0, self.reload_playlist_tracks)
             return

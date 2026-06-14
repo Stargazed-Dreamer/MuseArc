@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QItemSelectionModel, QModelIndex, Qt, QTimer, Signal
@@ -18,6 +20,8 @@ from musearc.ui.main_window_helpers import (
     _reveal_in_file_manager,
 )
 from musearc.ui.long_task import run_modal_task
+
+logger = logging.getLogger(__name__)
 
 
 # ?????
@@ -468,9 +472,15 @@ class LyricsManagementPage(QWidget):
     def _on_lyrics_field_edited(self, lyrics_id: str, key: str, value: object) -> None:
         if not lyrics_id:
             return
+        logger.info("[LyricsPage] _on_lyrics_field_edited: lid=%s key=%s value=%r", lyrics_id, key, value)
+        print(f"[edit] LyricsPage 收到: lid={lyrics_id} key={key} value={value!r}")
         try:
             self.facade.update_lyrics_fields([lyrics_id], {key: value})
+            logger.info("[LyricsPage] 编辑成功: lid=%s key=%s", lyrics_id, key)
+            print(f"[edit] LyricsPage 成功: lid={lyrics_id} key={key}")
         except Exception as exc:
+            logger.error("[LyricsPage] 编辑失败: lid=%s key=%s exc=%s", lyrics_id, key, exc)
+            print(f"[edit] LyricsPage 失败: lid={lyrics_id} key={key} exc={exc}")
             QMessageBox.warning(self, "编辑失败", f"edit: editing failed\n{exc}")
             QTimer.singleShot(0, self.reload_lyrics)
             return

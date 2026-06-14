@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,8 @@ from musearc.core.hashing import sha1_text
 from musearc.infra.media.tag_writer import write_basic_metadata_tags
 from musearc.services.importer import ImportService
 from musearc.services.library_ops import LibraryOpsService
+
+logger = logging.getLogger(__name__)
 
 FAVORITES_PLAYLIST_ID = "pl_favorites"
 
@@ -342,12 +345,15 @@ class FacadeLibraryMixin:
 
     def update_tracks_fields(self, track_ids: list[str], fields: dict[str, object]) -> int:
         """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1aupdate_tracks_fields\u3002"""
+        logger.info("[Facade] update_tracks_fields: ids=%s fields=%s", track_ids, list(fields.keys()))
+        print(f"[facade] update_tracks_fields: ids={track_ids} fields={list(fields.keys())}")
         with self.ctx.db.session() as conn:
             from musearc.infra.db.repositories import LibraryRepository
 
             repo = LibraryRepository(conn)
             before = repo.get_tracks_by_ids(track_ids)
             count = LibraryOpsService(repo).update_tracks_fields(track_ids, fields)
+            logger.info("[Facade] update_tracks_fields 结果: count=%d", count)
             if count > 0:
                 id3_keys = {"title", "artist", "album"}
                 id3_failures: list[str] = []
@@ -617,10 +623,13 @@ class FacadeLibraryMixin:
 
     def update_track_tag_values(self, track_ids: list[str], tag_name: str, value: str) -> int:
         """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1aupdate_track_tag_values\u3002"""
+        logger.info("[Facade] update_track_tag_values: ids=%s tag=%s val=%r", track_ids, tag_name, value)
+        print(f"[facade] update_track_tag_values: ids={track_ids} tag={tag_name} val={value!r}")
         with self.ctx.db.session() as conn:
             from musearc.infra.db.repositories import LibraryRepository
 
             count = LibraryOpsService(LibraryRepository(conn)).update_track_tag_values(track_ids, tag_name, value)
+            logger.info("[Facade] update_track_tag_values 结果: count=%d", count)
             if count > 0:
                 self._redo_actions.clear()
                 self._log(f"update_track_tag_values tag={tag_name} count={count}")
@@ -910,12 +919,15 @@ class FacadeLibraryMixin:
 
     def update_lyrics_fields(self, lyrics_ids: list[str], fields: dict[str, object]) -> int:
         """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1aupdate_lyrics_fields\u3002"""
+        logger.info("[Facade] update_lyrics_fields: ids=%s fields=%s", lyrics_ids, list(fields.keys()))
+        print(f"[facade] update_lyrics_fields: ids={lyrics_ids} fields={list(fields.keys())}")
         with self.ctx.db.session() as conn:
             from musearc.infra.db.repositories import LibraryRepository
 
             repo = LibraryRepository(conn)
             before = repo.get_lyrics_by_ids(lyrics_ids)
             count = LibraryOpsService(repo).update_lyrics_fields(lyrics_ids, fields)
+            logger.info("[Facade] update_lyrics_fields 结果: count=%d", count)
             if count > 0:
                 rollback_values = []
                 for row in before:

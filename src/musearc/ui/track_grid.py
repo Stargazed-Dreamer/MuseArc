@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import QItemSelection, QItemSelectionModel, QModelIndex, Qt, QTimer, Signal
 from PySide6.QtGui import QKeyEvent, QKeySequence, QMouseEvent, QShortcut
 from PySide6.QtWidgets import (
@@ -23,6 +25,8 @@ from musearc.ui.table_models import ColumnDef, DictTableModel
 from musearc.ui.track_table_model import TrackTableModel
 from musearc.ui.main_window_helpers import _apply_button_scale
 from musearc.ui.long_task import run_modal_task
+
+logger = logging.getLogger(__name__)
 
 
 def _copy_selected_cells(table: QTableView) -> None:
@@ -312,6 +316,11 @@ class TrackTableView(QTableView):
             return
         if hasattr(model, "is_group_row") and model.is_group_row(idx.row()):
             return
+        # 诊断：双击编辑触发
+        key = model.column_key(idx.column()) if hasattr(model, "column_key") else ""
+        editable = bool(model.flags(idx) & Qt.ItemFlag.ItemIsEditable)
+        logger.debug("[TrackTableView] 双击: row=%d col=%d key=%s editable=%s", idx.row(), idx.column(), key, editable)
+        print(f"[edit] 双击触发: row={idx.row()} col={idx.column()} key={key} editable={editable}")
         super().mouseDoubleClickEvent(event)
 
     def _move_cursor_and_edit(self, row_delta: int, col_delta: int) -> bool:
@@ -760,6 +769,8 @@ class TrackGridWidget(QWidget):
 
     def _on_model_track_field_edited(self, track_id: str, key: str, value) -> None:
         keep_ids = list(self.model.visual_selected_track_ids)
+        logger.info("[TrackGridWidget] 收到 model 编辑信号: tid=%s key=%s value=%r", track_id, key, value)
+        print(f"[edit] Grid中转: tid={track_id} key={key} value={value!r}")
         self.track_field_edited.emit(track_id, key, value)
 
         session = self._bulk_edit_session
