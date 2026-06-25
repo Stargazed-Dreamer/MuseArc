@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
@@ -24,59 +24,87 @@ def _utc_now_iso() -> str:
 
 
 def _merge_lyrics_text(primary_text: str, secondary_text: str) -> str:
+    """
+    合并两个歌词文本，将主要和次要歌词按时间戳合并，同时保留无时间戳的歌词行。
+
+    参数：
+        primary_text (str): 主要歌词文本，包含时间戳的歌词行。
+        secondary_text (str): 次要歌词文本，将被合并到主要歌词中。
+
+    返回值：
+        str: 合并后的完整歌词文本，按时间排序，相同时间戳的歌词用竖线分隔。
+    """
     def _collect(text: str) -> tuple[list[tuple[int, int, str, str]], list[str]]:
-        timed: list[tuple[int, int, str, str]] = []
-        untimed: list[str] = []
-        order = 0
-        for raw in str(text or "").splitlines():
-            line = str(raw or "").rstrip("\r\n")
-            if not line.strip():
+        """
+        收集歌词文本中的时间戳行和无时间戳行。
+
+        参数：
+            text (str): 输入的歌词文本。
+
+        返回值：
+            tuple: 包含两个列表的元组：
+                - timed: 有时间戳的歌词列表，每个元素是(时间戳百分秒, 顺序, 时间标签, 歌词内容)
+                - untimed: 无时间戳的歌词文本列表
+        """
+        timed: list[tuple[int, int, str, str]] = []  # 存储有时间戳的歌词
+        untimed: list[str] = []  # 存储无时间戳的歌词
+        order = 0  # 用于保持相同时间戳歌词的出现顺序
+        for raw in str(text or "").splitlines():  # 处理每行歌词
+            line = str(raw or "").rstrip("\r\n")  # 去除行尾换行符
+            if not line.strip():  # 跳过空行
                 continue
-            stamps = list(_TIMESTAMP_RE.finditer(line))
-            if not stamps:
-                untimed.append(line.strip())
+            stamps = list(_TIMESTAMP_RE.finditer(line))  # 查找所有时间戳
+            if not stamps:  # 没有时间戳的行
+                untimed.append(line.strip())  # 添加到无时间戳列表
                 continue
-            content = _TIMESTAMP_RE.sub("", line).strip()
-            for match in stamps:
-                mm = int(match.group(1))
-                ss = int(match.group(2))
-                frac_raw = str(match.group(3) or "0")
-                frac = int((frac_raw + "00")[:2])
-                centisec = mm * 6000 + ss * 100 + frac
-                tag = f"[{mm:02d}:{ss:02d}.{frac:02d}]"
-                timed.append((centisec, order, tag, content))
-                order += 1
+            content = _TIMESTAMP_RE.sub("", line).strip()  # 提取歌词内容（去除时间戳）
+            for match in stamps:  # 处理每个时间戳（一行可能有多个时间戳）
+                mm = int(match.group(1))  # 分钟数
+                ss = int(match.group(2))  # 秒数
+                frac_raw = str(match.group(3) or "0")  # 小数部分
+                frac = int((frac_raw + "00")[:2])  # 取前两位作为百分秒
+                centisec = mm * 6000 + ss * 100 + frac  # 转换为总百分秒数
+                tag = f"[{mm:02d}:{ss:02d}.{frac:02d}]"  # 格式化时间标签
+                timed.append((centisec, order, tag, content))  # 存储时间戳信息
+                order += 1  # 更新顺序计数器
         return timed, untimed
 
+    # 收集主要和次要歌词的时间戳行和无时间戳行
     timed_primary, untimed_primary = _collect(primary_text)
     timed_secondary, untimed_secondary = _collect(secondary_text)
 
-    merged_timed: dict[int, tuple[int, str, str]] = {}
+    merged_timed: dict[int, tuple[int, str, str]] = {}  # 合并后的有时间戳歌词，以时间为键
+    # 首先处理主要歌词的时间戳行
     for centisec, order, tag, content in timed_primary:
-        merged_timed[centisec] = (order, tag, content)
+        merged_timed[centisec] = (order, tag, content)  # 存储主要歌词
+    # 然后处理次要歌词的时间戳行，与主要歌词合并
     for centisec, order, tag, content in timed_secondary:
-        existing = merged_timed.get(centisec)
-        if existing is None:
-            merged_timed[centisec] = (10_000 + order, tag, content)
+        existing = merged_timed.get(centisec)  # 检查该时间点是否已有歌词
+        if existing is None:  # 如果没有，添加次要歌词
+            merged_timed[centisec] = (10_000 + order, tag, content)  # 顺序号加偏移量，保持相对顺序
             continue
-        old_order, old_tag, old_content = existing
-        if content and content not in old_content.split(" | "):
+        old_order, old_tag, old_content = existing  # 已有歌词信息
+        if content and content not in old_content.split(" | "):  # 如果次要歌词内容不同且非空
+            # 合并歌词内容，用竖线分隔
             joined = f"{old_content} | {content}" if old_content else content
-            merged_timed[centisec] = (old_order, old_tag, joined)
+            merged_timed[centisec] = (old_order, old_tag, joined)  # 更新合并后的内容
 
+    # 生成最终的合并歌词行列表
     merged_lines: list[str] = []
+    # 按时间顺序（相同时间按顺序号）排序
     for centisec, payload in sorted(merged_timed.items(), key=lambda item: (item[0], item[1][0])):
         _order, tag, content = payload
-        merged_lines.append(f"{tag}{content}".rstrip())
+        merged_lines.append(f"{tag}{content}".rstrip())  # 组合时间标签和歌词内容
 
-    seen_untimed: set[str] = set()
-    for line in [*untimed_primary, *untimed_secondary]:
-        text = str(line or "").strip()
-        if not text or text in seen_untimed:
+    # 处理无时间戳的歌词行
+    seen_untimed: set[str] = set()  # 用于去重
+    for line in [*untimed_primary, *untimed_secondary]:  # 合并两个列表
+        text = str(line or "").strip()  # 清理文本
+        if not text or text in seen_untimed:  # 跳过空文本或重复文本
             continue
-        seen_untimed.add(text)
-        merged_lines.append(text)
-    return "\n".join(merged_lines).strip()
+        seen_untimed.add(text)  # 记录已处理文本
+        merged_lines.append(text)  # 添加无时间戳歌词
+    return "\n".join(merged_lines).strip()  # 用换行符连接所有歌词行并去除首尾空白
 
 class FacadeLibraryMixin:
     """Facade mixin: library/review/playlist/tag/lyrics workflows."""

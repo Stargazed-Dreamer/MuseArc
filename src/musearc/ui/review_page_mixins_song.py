@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """审查页面-歌曲审查区 Mixin。
 
@@ -32,24 +32,56 @@ from PySide6.QtWidgets import (
 
 
 def _safe_float(value, default: float = 0.0) -> float:
+    """
+    安全地将值转换为浮点数，转换失败时返回默认值。
+
+    参数:
+        value: 需要被转换为浮点数的任意类型值。
+        default (float, 可选): 当转换失败时返回的默认值，默认为0.0。
+
+    返回值:
+        float: 转换成功返回对应的浮点数，否则返回默认值。
+    """
     try:
-        return float(value)
+        return float(value)  # 尝试将输入值转换为浮点数
     except Exception:
-        return default
+        return default  # 转换失败时返回预设的默认值
 
 
 def _safe_int(value, default: int = 0) -> int:
-    if isinstance(value, (list, tuple, dict, set)):
+    """将值安全地转换为整数。
+
+    如果值为列表、元组、字典或集合，则直接返回默认值。
+    尝试将值转换为整数，如果值为None或假值，则使用0进行转换。
+    如果转换失败（例如值为非数字字符串），则返回默认值。
+
+    参数:
+        value: 任何要尝试转换为整数的值。
+        default: 整数，默认值为0。
+
+    返回:
+        int: 转换后的整数或默认值。
+    """
+    if isinstance(value, (list, tuple, dict, set)):  # 检查值是否为列表、元组、字典或集合，如果是则直接返回默认值
         return default
     try:
-        return int(value or 0)
-    except Exception:
+        return int(value or 0)  # 尝试将值转换为整数，如果值为假值则使用0作为默认输入
+    except Exception:  # 捕获所有转换异常，如值无法转换为整数
         return default
 
 
 def _format_mmss(seconds: int) -> str:
-    sec = max(0, _safe_int(seconds, 0))
-    return f"{sec // 60:02d}:{sec % 60:02d}"
+    """
+    将秒数格式化为"MM:SS"格式的字符串。
+
+    参数:
+        seconds (int): 秒数。
+
+    返回:
+        str: 格式化后的字符串，格式为"MM:SS"。
+    """
+    sec = max(0, _safe_int(seconds, 0))  # 安全转换为整数并确保非负
+    return f"{sec // 60:02d}:{sec % 60:02d}"  # 计算分钟和秒数，并格式化为两位数字符串
 
 
 def _track_label(track: dict) -> str:
@@ -57,14 +89,34 @@ def _track_label(track: dict) -> str:
 
 
 def _looks_like_hash_filename(name: str) -> bool:
-    text = Path(str(name or "")).stem.casefold()
-    if text.startswith("trk_") and len(text) >= 12:
+    """
+    检查文件名是否看起来像一个哈希文件名。
+
+    参数：
+        name (str): 要检查的文件名。
+
+    返回：
+        bool: 如果文件名以"trk_"开头且长度至少12个字符，则返回True；否则返回False。
+    """
+    text = Path(str(name or "")).stem.casefold()  # 确保name不为None或空，转换为字符串并取文件名部分，然后转为小写以进行不区分大小写的比较
+    if text.startswith("trk_") and len(text) >= 12:  # 检查文件名是否以"trk_"前缀开头且总长度至少为12个字符
         return True
     return False
 
 
 def _format_rank(value: str | None) -> int:
+    """
+    根据音频格式名称返回一个排名值。
+    
+    参数：
+    value (str | None): 音频格式名称的字符串，可能为None。
+    
+    返回：
+    int: 音频格式的排名值，范围从40到90，根据格式类型而定。
+    """
+    # 处理输入值：如果为None或空，则用空字符串代替，然后去除空格、转为小写并移除句点
     text = str(value or "").strip().lower().replace(".", "")
+    # 定义音频格式到排名值的映射字典
     rank = {
         "flac": 90,
         "wav": 85,
@@ -77,6 +129,7 @@ def _format_rank(value: str | None) -> int:
         "wma": 56,
         "mp3": 50,
     }
+    # 获取对应排名，如果格式不在字典中则返回默认值40
     return rank.get(text, 40)
 
 
@@ -84,12 +137,21 @@ class _ClickableFrame(QFrame):
     clicked = Signal()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
-            cb = getattr(self, '_click_cb', None)
-            if callable(cb):
-                cb()
-            self.clicked.emit()
-        super().mousePressEvent(event)
+        """
+        处理鼠标点击事件。
+
+        参数:
+        event (QMouseEvent): 鼠标事件对象，包含点击位置和按钮信息。
+
+        返回值:
+        无返回值（None）。
+        """
+        if event.button() == Qt.MouseButton.LeftButton:  # 检查是否左键点击
+            cb = getattr(self, '_click_cb', None)  # 从实例属性获取回调函数，若不存在则为None
+            if callable(cb):  # 如果回调函数存在且可调用
+                cb()  # 执行回调函数
+            self.clicked.emit()  # 发出clicked信号，通知外部点击事件
+        super().mousePressEvent(event)  # 调用父类的mousePressEvent方法，确保事件正确处理
 
 
 class _ClickableLabel(QLabel):
@@ -198,17 +260,28 @@ class ReviewPageSongMixin:
 
     @staticmethod
     def _open_in_file_manager(path_text: str) -> None:
+        """功能：在文件管理器中打开指定路径或选择指定文件。
+    参数：path_text (str) - 要打开的路径或文件路径。
+    返回值：None - 无返回值。
+    """
+        # 将path_text转换为字符串，如果为None则使用空字符串，并去除首尾空白
         target_text = str(path_text or "").strip()
+        # 如果路径文本为空，则直接返回
         if not target_text:
             return
         try:
+            # 创建Path对象
             target = Path(target_text)
+            # 如果路径存在且是文件，则打开文件管理器并选择该文件
             if target.exists() and target.is_file():
                 subprocess.Popen(["explorer", "/select,", str(target)])
+            # 如果路径存在（可能是目录），则打开该目录
             elif target.exists():
                 subprocess.Popen(["explorer", str(target)])
+            # 如果路径不存在但父目录存在，则打开父目录
             elif target.parent.exists():
                 subprocess.Popen(["explorer", str(target.parent)])
+        # 捕获所有异常，防止程序崩溃
         except Exception:
             return
 

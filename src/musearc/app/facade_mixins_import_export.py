@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
@@ -297,13 +297,21 @@ class FacadeImportExportMixin:
 
     @staticmethod
     def _norm_path_for_compare(value: str | Path) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return ""
+        """规范化路径以便比较，将输入转换为小写形式的绝对路径。
+
+        参数：
+            value (str | Path): 输入值，可以是字符串或Path对象。
+
+        返回值：
+            str: 规范化后的路径字符串。如果输入为空，返回空字符串；如果解析失败，返回手动处理后的字符串。
+        """
+        text = str(value or "").strip()  # 将输入转换为字符串，处理None或空值，并去除前后空白
+        if not text:  # 如果文本为空，表示无效输入
+            return ""  # 返回空字符串
         try:
-            return str(Path(text).expanduser().resolve()).casefold()
-        except Exception:
-            return text.replace("\\", "/").casefold()
+            return str(Path(text).expanduser().resolve()).casefold()  # 尝试规范化路径：展开用户目录、解析为绝对路径，并转换为小写
+        except Exception:  # 如果路径解析过程中出现任何异常（如路径无效）
+            return text.replace("\\", "/").casefold()  # 降级处理：手动将反斜杠替换为正斜杠，并转换为小写以确保一致性
 
     @staticmethod
     def _resolve_track_from_export_item(
@@ -313,16 +321,37 @@ class FacadeImportExportMixin:
         by_id: dict[str, dict],
         by_storage: dict[str, dict],
     ) -> dict | None:
+        """
+        根据导出项在多个查找字典中解析并返回对应的曲目记录。
+
+        该方法尝试通过三种方式（SHA256哈希、曲目ID、存储相对路径）从提供的字典中查找匹配的曲目。
+        查找按顺序进行，一旦找到就立即返回。
+
+        Args:
+            item: 包含导出项信息的字典，可能包含 track_id, storage_relpath, source_sha256 等键。
+            by_sha: 以 source_sha256 为键，曲目记录字典为值的查找字典。
+            by_id: 以 track_id 为键，曲目记录字典为值的查找字典。
+            by_storage: 以 storage_relpath 为键，曲目记录字典为值的查找字典。
+
+        Returns:
+            如果找到匹配的曲目，则返回该曲目的字典记录；否则返回 None。
+        """
+        # 从导出项中提取并清理相关字段，确保它们是干净的字符串
         tid = str(item.get("track_id", "") or "").strip()
         storage_rel = str(item.get("storage_relpath", "") or "").replace("\\", "/").strip()
         source_sha256 = str(item.get("source_sha256", "") or "").strip().lower()
+        # 初始化结果为 None，表示尚未找到匹配项
         row = None
+        # 第一步：尝试通过源文件的 SHA256 哈希值进行查找
         if source_sha256:
             row = by_sha.get(source_sha256)
+        # 第二步：如果第一步未找到结果，并且存在曲目ID，则通过曲目ID进行查找
         if row is None and tid:
             row = by_id.get(tid)
+        # 第三步：如果前两步都未找到结果，并且存在存储相对路径，则通过该路径进行查找
         if row is None and storage_rel:
             row = by_storage.get(storage_rel)
+        # 返回最终找到的曲目记录或 None
         return row
 
     def inspect_playlist_package(self, file_path: str) -> dict:

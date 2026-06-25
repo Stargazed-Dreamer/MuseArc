@@ -14,42 +14,109 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
 
 def _safe_float(value, default: float = 0.0) -> float:
+    """将输入值安全地转换为浮点数。
+
+    尝试将给定的值转换为浮点类型，如果转换过程中发生任何异常，则返回指定的默认值。
+    这是一种防御性编程方式，用于处理可能不可靠或格式未知的输入数据。
+
+    参数:
+        value: 待转换的值，可以是任何类型。
+        default (float, 可选): 当转换失败时返回的默认值，默认为 0.0。
+
+    返回:
+        float: 转换成功后的浮点数值，或转换失败时的默认值。
+    """
     try:
-        return float(value)
+        return float(value)  # 尝试将输入值转换为浮点数
     except Exception:
-        return default
+        return default  # 如果发生任何异常（如ValueError, TypeError等），则安全地返回默认值
 
 
 def _safe_int(value, default: int = 0) -> int:
+    """安全地将一个值转换为整数，如果转换失败则返回给定的默认值。
+
+    该函数首先检查传入的值是否为不可直接转换为整数的容器类型（如列表、字典等），
+    如果是则立即返回默认值。随后尝试使用int()进行转换，若发生任何异常，
+    也会返回默认值，从而避免程序因类型转换错误而中断。
+
+    Args:
+        value: 需要转换的值。可以是数字、字符串或其他可被int()转换的对象。
+        default (int, optional): 转换失败时返回的默认值，默认为0。
+
+    Returns:
+        int: 转换成功后的整数，或转换失败时返回的默认值。
+    """
+    # 排除常见无法直接用int()转换的容器类型
     if isinstance(value, (list, tuple, dict, set)):
         return default
     try:
+        # 尝试将值转换为整数；如果值为None或空字符串等“假值”，则用0替代
         return int(value or 0)
     except Exception:
+        # 捕获所有可能的转换异常（如ValueError， TypeError等），返回默认值
         return default
 
 
 def _canonical_lyrics_name(file_name: str) -> str:
+    """
+    规范化歌词名称函数。
+
+    功能：清理并规范化文件名，使其适合用作歌词名称。
+    参数：
+        file_name (str): 输入的文件名字符串。
+    返回值：
+        str: 处理后的规范化字符串。
+    """
+    # 使用Path提取文件主干，转换为小写并去除空格
     stem = Path(str(file_name or "")).stem.casefold().strip()
+    # 将空格、点、下划线、连字符替换为单个空格
     stem = re.sub(r"[\s._-]+", " ", stem)
+    # 删除末尾的括号及其内容，支持中英文括号
     stem = re.sub(r"\s*[\(\[\uFF08\u3010].*?[\)\]\uFF09\u3011]\s*$", "", stem)
+    # 去除首尾空格后返回
     return stem.strip()
 
 
 def _lyrics_file_bracket_count(file_name: str) -> int:
+    """统计文件名（去后缀）中括号对的数量。
+    
+    此函数用于分析给定的文件名，提取其不包含后缀的文件主名部分，
+    并利用正则表达式查找其中所有匹配的、由多种括号符号构成的子串。
+    
+    参数：
+        file_name (str): 需要分析的文件名，可以包含后缀。
+        
+    返回值：
+        int: 文件主名中找到的匹配括号对的数量。
+    """
+    # 获取文件的主干部分（去除文件后缀），若文件名为空或None则视为空字符串
     stem = Path(str(file_name or "")).stem
+    # 使用正则表达式查找所有被括号对（包含英文()、[]，以及中文（）、【】）包围的子串，并计算其数量
     return len(re.findall(r"[\(\[\uFF08\u3010].*?[\)\]\uFF09\u3011]", stem))
 
 
 def _lyrics_row_key(row: dict) -> str:
+    """根据歌词行数据生成用于分组的唯一键。
+
+    此函数从输入的字典中提取特定字段，并将它们连接成一个以竖线分隔的字符串，
+    用于作为后续处理（如去重、分组）的键。
+
+    Args:
+        row (dict): 包含歌词信息的字典。如果传入非字典类型，将使用一个空字典作为默认值。
+
+    Returns:
+        str: 由 review_id, lyrics_source, lyrics_id 拼接而成的字符串，首尾可能的竖线会被移除。
+    """
+    # 确保 payload 是字典类型，如果输入 row 不是字典，则默认使用空字典，避免后续操作报错
     payload = row if isinstance(row, dict) else {}
+    # 从字典中安全地获取三个字段的值（若字段不存在或值为空则使用空字符串），并用竖线连接
     return "|".join(
         [
             str(payload.get("review_id", "") or ""),
             str(payload.get("lyrics_source", "") or ""),
             str(payload.get("lyrics_id", "") or ""),
         ]
-    ).strip("|")
+    ).strip("|") # 去除拼接后字符串首尾可能存在的竖线
 
 
 class _ClickableFrame(QFrame):
@@ -272,16 +339,22 @@ class ReviewPageLyricsMixin:
         return row_ctrl
 
     def _reveal_lyrics_file(self, row: dict) -> None:
-        storage_rel = str((row or {}).get("storage_relpath", "") or "").strip()
-        if not storage_rel:
+        """
+        功能：在资源管理器中显示歌词文件的位置。
+        参数：
+            row: dict，包含存储路径信息的字典，预期键包括"storage_relpath"。
+        返回值：无。
+        """
+        storage_rel = str((row or {}).get("storage_relpath", "") or "").strip()  # 安全获取存储路径字符串，处理None或空值
+        if not storage_rel:  # 如果存储路径为空，直接返回，避免后续操作
             return
-        target = Path(self.facade.library_root) / storage_rel
+        target = Path(self.facade.library_root) / storage_rel  # 构建目标文件的完整路径，使用库根目录和相对路径拼接
         try:
-            if target.exists():
+            if target.exists():  # 如果目标文件存在，在资源管理器中选择该文件
                 subprocess.Popen(["explorer", "/select,", str(target)])
-            elif target.parent.exists():
+            elif target.parent.exists():  # 否则，如果父目录存在，在资源管理器中打开该目录
                 subprocess.Popen(["explorer", str(target.parent)])
-        except Exception:
+        except Exception:  # 捕获所有异常，静默返回，避免程序中断
             return
 
     def _on_lyrics_row_clicked(self, row: dict) -> None:
@@ -413,36 +486,61 @@ class ReviewPageLyricsMixin:
         self.preview_left.setPlainText(self._read_lyrics_text(rows[-2]))
         self.preview_right.setPlainText(self._read_lyrics_text(rows[-1]))
     def _lyrics_title_hint(self, row: dict) -> str:
+        """从字典行中提取歌词标题提示。
+    
+        功能：尝试从输入字典中获取歌词标题，若无则从预览内容或源文件名中提取。
+        参数：row - 包含歌词信息的字典，可能为None或空字典。
+        返回值：提取到的歌词标题字符串。
+        """
+        # 尝试从字典中获取lyrics_title字段，若row为None则使用空字典，确保不会报错
         title = str((row or {}).get("lyrics_title", "") or "").strip()
+        # 如果成功获取到非空标题，直接返回
         if title:
             return title
+    
+        # 如果没有标题，尝试从preview字段获取内容
         preview = str((row or {}).get("preview", "") or "")
+        # 遍历预览内容的前30行，寻找类似[ti:xxx]格式的标题标记
         for line in preview.splitlines()[:30]:
-            s = str(line or "").strip()
-            low = s.casefold()
+            s = str(line or "").strip()  # 处理可能为空的行
+            low = s.casefold()  # 转换为小写便于比较
+            # 检查是否符合[ti:xxx]的格式
             if low.startswith("[ti:") and s.endswith("]"):
+                # 截取[ti:和]之间的内容并去除两端空格
                 return s[4:-1].strip()
+    
+        # 如果以上方法都未找到标题，则使用lyrics_source字段的文件名部分
         source = str((row or {}).get("lyrics_source", "") or "")
+        # Path(source).stem 获取文件名（不含扩展名）
         return Path(source).stem.strip()
 
     def _update_lyrics_bind_label(self, row: dict, track_id: str | None) -> None:
-        row_key = _lyrics_row_key(row)
-        if not row_key:
+        """更新歌词绑定标签的显示文本。
+
+        参数：
+            row (dict): 歌词行的字典。
+            track_id (str | None): 曲目ID，可以是字符串或None。
+
+        返回值：
+            None: 无返回值。
+        """
+        row_key = _lyrics_row_key(row)  # 从行字典生成键
+        if not row_key:  # 如果没有键，直接返回
             return
-        row_ctrl = self._lyrics_row_controls.get(row_key) if isinstance(self._lyrics_row_controls, dict) else None
-        if not isinstance(row_ctrl, dict):
+        row_ctrl = self._lyrics_row_controls.get(row_key) if isinstance(self._lyrics_row_controls, dict) else None  # 安全获取行控件，检查_controls是否为字典
+        if not isinstance(row_ctrl, dict):  # 如果行控件不是字典，返回
             return
-        label = row_ctrl.get("bind_text_label")
-        if not isinstance(label, QLabel):
+        label = row_ctrl.get("bind_text_label")  # 获取绑定文本标签
+        if not isinstance(label, QLabel):  # 如果标签不是QLabel实例，返回
             return
-        if track_id:
-            track = self._track_map.get(str(track_id)) if isinstance(getattr(self, "_track_map", {}), dict) else None
-            if isinstance(track, dict):
-                title = str(track.get("title", "") or "")
-                artist = str(track.get("artist", "") or "")
-                label.setText(f"当前已绑：{artist or 'Unknown Artist'} - {title or 'Unknown Title'}")
-                return
-        label.setText("点击绑定数据库歌曲")
+        if track_id:  # 如果有曲目ID
+            track = self._track_map.get(str(track_id)) if isinstance(getattr(self, "_track_map", {}), dict) else None  # 安全获取曲目信息，检查_track_map属性
+            if isinstance(track, dict):  # 如果曲目是字典
+                title = str(track.get("title", "") or "")  # 获取标题，处理None或空字符串
+                artist = str(track.get("artist", "") or "")  # 获取艺术家，处理None或空字符串
+                label.setText(f"当前已绑：{artist or 'Unknown Artist'} - {title or 'Unknown Title'}")  # 设置标签文本，显示绑定的歌曲信息
+                return  # 设置后返回
+        label.setText("点击绑定数据库歌曲")  # 如果没有track_id或曲目无效，设置提示文本
 
     def _next_lyrics_row_for_chain(self, row: dict) -> dict | None:
         key = _lyrics_row_key(row)

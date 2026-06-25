@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -28,62 +28,96 @@ class SettingsPage(QWidget):
     settings_saved = Signal()
 
     def __init__(self, facade: MuseArcFacade):
-        super().__init__()
-        self.facade = facade
+        """
+        初始化设置界面，创建并配置所有UI控件。
+    
+        参数：
+            facade (MuseArcFacade): 应用程序外观门面对象，用于与后端交互。
+    
+        返回值：
+            无
+        """
+        super().__init__()  # 调用父类构造函数
+        self.facade = facade  # 保存门面对象引用
 
-        root = QVBoxLayout(self)
-        form = QFormLayout()
+        root = QVBoxLayout(self)  # 创建主垂直布局
+        form = QFormLayout()  # 创建表单布局用于排列标签-控件对
 
+        # 创建并配置指纹阈值的自旋框
         self.spin_threshold = QSpinBox()
-        self.spin_threshold.setRange(1, 1000)
+        self.spin_threshold.setRange(1, 1000)  # 设置范围1-1000
 
+        # 创建并配置撤回记录最大数量的自旋框
         self.spin_undo = QSpinBox()
-        self.spin_undo.setRange(1, 10000)
+        self.spin_undo.setRange(1, 10000)  # 设置范围1-10000
 
+        # 创建并配置按钮缩放倍率的浮点自旋框
         self.spin_button_scale = QDoubleSpinBox()
-        self.spin_button_scale.setRange(1.0, 2.5)
-        self.spin_button_scale.setSingleStep(0.05)
+        self.spin_button_scale.setRange(1.0, 2.5)  # 设置范围1.0-2.5
+        self.spin_button_scale.setSingleStep(0.05)  # 设置步长为0.05
 
+        # 创建并配置自动保存间隔的自旋框
         self.spin_autosave = QSpinBox()
-        self.spin_autosave.setRange(1, 120)
+        self.spin_autosave.setRange(1, 120)  # 设置范围1-120分钟
+
+        # 创建并配置指纹处理工作线程数的自旋框
         self.spin_fp_workers = QSpinBox()
-        self.spin_fp_workers.setRange(0, 16)
+        self.spin_fp_workers.setRange(0, 16)  # 设置范围0-16，0表示自动
+
+        # 创建并配置重复比对工作线程数的自旋框
         self.spin_dup_workers = QSpinBox()
-        self.spin_dup_workers.setRange(0, 16)
+        self.spin_dup_workers.setRange(0, 16)  # 设置范围0-16，0表示自动
+
+        # 创建并配置重复并发阈值的自旋框
         self.spin_dup_threshold = QSpinBox()
-        self.spin_dup_threshold.setRange(1, 5000)
+        self.spin_dup_threshold.setRange(1, 5000)  # 设置范围1-5000
+
+        # 创建并配置歌词比对工作线程数的自旋框
         self.spin_lyrics_workers = QSpinBox()
-        self.spin_lyrics_workers.setRange(0, 16)
+        self.spin_lyrics_workers.setRange(0, 16)  # 设置范围0-16，0表示自动
+
+        # 创建并配置歌词并发阈值的自旋框
         self.spin_lyrics_threshold = QSpinBox()
-        self.spin_lyrics_threshold.setRange(1, 5000)
+        self.spin_lyrics_threshold.setRange(1, 5000)  # 设置范围1-5000
+
+        # 创建并配置通用工作线程数上限的自旋框
         self.spin_general_workers = QSpinBox()
-        self.spin_general_workers.setRange(0, 64)
+        self.spin_general_workers.setRange(0, 64)  # 设置范围0-64，0表示自动
+
+        # 创建并配置全量扫描时的指纹比对进程数的自旋框
         self.spin_fullscan_fp_processes = QSpinBox()
-        self.spin_fullscan_fp_processes.setRange(0, 32)
+        self.spin_fullscan_fp_processes.setRange(0, 32)  # 设置范围0-32，0表示自动
 
+        # 创建并配置删除模式下拉框
         self.combo_delete_mode = QComboBox()
-        self.combo_delete_mode.addItem("绑定歌词一起移动到回收站", "move_linked_lyrics")
-        self.combo_delete_mode.addItem("仅删除歌曲并解开映射关系", "unlink_only")
+        self.combo_delete_mode.addItem("绑定歌词一起移动到回收站", "move_linked_lyrics")  # 添加选项并关联数据
+        self.combo_delete_mode.addItem("仅删除歌曲并解开映射关系", "unlink_only")  # 添加选项并关联数据
+
+        # 创建并配置歌词单元格操作下拉框
         self.combo_lyrics_cell_action = QComboBox()
-        self.combo_lyrics_cell_action.addItem("更改歌词绑定", "change_mapping")
-        self.combo_lyrics_cell_action.addItem("跳转到歌词管理", "jump_to_lyrics")
+        self.combo_lyrics_cell_action.addItem("更改歌词绑定", "change_mapping")  # 添加选项并关联数据
+        self.combo_lyrics_cell_action.addItem("跳转到歌词管理", "jump_to_lyrics")  # 添加选项并关联数据
 
+        # 创建并配置播放器模式下拉框
         self.combo_player_mode = QComboBox()
-        self.combo_player_mode.addItem("内置播放器", "builtin")
-        self.combo_player_mode.addItem("外部播放器", "external")
+        self.combo_player_mode.addItem("内置播放器", "builtin")  # 添加选项并关联数据
+        self.combo_player_mode.addItem("外部播放器", "external")  # 添加选项并关联数据
 
-        self.input_player_path = QLineEdit()
-        self.btn_pick_player = QPushButton("浏览...")
-        player_row = QWidget()
-        player_layout = QHBoxLayout(player_row)
-        player_layout.setContentsMargins(0, 0, 0, 0)
-        player_layout.addWidget(self.input_player_path, 1)
-        player_layout.addWidget(self.btn_pick_player)
+        # 创建外部播放器路径输入框和浏览按钮
+        self.input_player_path = QLineEdit()  # 创建输入框
+        self.btn_pick_player = QPushButton("浏览...")  # 创建浏览按钮
+        player_row = QWidget()  # 创建容器小部件
+        player_layout = QHBoxLayout(player_row)  # 为容器创建水平布局
+        player_layout.setContentsMargins(0, 0, 0, 0)  # 移除边距以紧凑排列
+        player_layout.addWidget(self.input_player_path, 1)  # 添加输入框并设置拉伸因子为1
+        player_layout.addWidget(self.btn_pick_player)  # 添加浏览按钮
 
+        # 创建并配置复选框控件
         self.chk_enable_logs = QCheckBox("启用日志记录（仅保留最近10条）")
         self.chk_empty_confirm = QCheckBox("双击编辑为空时弹窗确认")
         self.chk_realtime_search = QCheckBox("启用实时搜索（输入即搜索）")
 
+        # 将创建的控件添加到表单布局中，标签与控件对应
         form.addRow("退出多选强制保存阈值", self.spin_threshold)
         form.addRow("撤回最大保留条数", self.spin_undo)
         form.addRow("按钮高度倍率", self.spin_button_scale)
@@ -98,39 +132,68 @@ class SettingsPage(QWidget):
         form.addRow("删除歌曲默认行为", self.combo_delete_mode)
         form.addRow("编辑歌词文件名默认动作", self.combo_lyrics_cell_action)
         form.addRow("默认播放方式", self.combo_player_mode)
-        form.addRow("外部播放器路径", player_row)
-        form.addRow("", self.chk_enable_logs)
+        form.addRow("外部播放器路径", player_row)  # 添加包含输入框和按钮的容器行
+        form.addRow("", self.chk_enable_logs)  # 无标签行，仅复选框
         form.addRow("", self.chk_empty_confirm)
         form.addRow("", self.chk_realtime_search)
 
+        # 创建并配置播放器联动端口的自旋框
         self.spin_player_link_port = QSpinBox()
-        self.spin_player_link_port.setRange(1024, 65535)
-        self.spin_player_link_port.setValue(43121)
+        self.spin_player_link_port.setRange(1024, 65535)  # 设置端口范围1024-65535
+        self.spin_player_link_port.setValue(43121)  # 设置默认端口号
         form.addRow("播放器联动端口", self.spin_player_link_port)
 
+        # 创建保存按钮并连接点击信号到保存设置的方法
         self.btn_save = QPushButton("保存")
-        self.btn_save.clicked.connect(self.save_settings)
+        self.btn_save.clicked.connect(self.save_settings)  # 连接信号到槽函数
 
-        root.addLayout(form)
-        root.addWidget(self.btn_save)
-        root.addStretch(1)
+        # 将表单布局和保存按钮添加到主布局中
+        root.addLayout(form)  # 添加表单布局
+        root.addWidget(self.btn_save)  # 添加保存按钮
+        root.addStretch(1)  # 添加拉伸项，将控件推至顶部
 
+        # 连接播放器模式下拉框变化信号到相应的槽函数
         self.combo_player_mode.currentIndexChanged.connect(self._on_player_mode_changed)
+        # 连接浏览按钮点击信号到选择外部播放器的槽函数
         self.btn_pick_player.clicked.connect(self._pick_external_player)
 
+        # 调用方法使用传入的facade对象初始化设置
         self.set_facade(facade)
 
     def apply_button_scale(self, scale: float) -> None:
+        """
+        此方法用于将给定的缩放比例应用到保存按钮和选择玩家按钮。
+    
+        参数:
+            scale (float): 缩放比例。
+    
+        返回:
+            None: 此方法不返回任何值。
+        """
+        # 将缩放比例应用到保存按钮
         _apply_button_scale(self.btn_save, scale)
+        # 将缩放比例应用到选择玩家按钮
         _apply_button_scale(self.btn_pick_player, scale)
 
     def set_facade(self, facade: MuseArcFacade) -> None:
+        """设置界面外观并同步运行时配置到UI控件。
+
+        Args:
+            facade (MuseArcFacade): 应用程序外观配置对象，提供运行时配置数据。
+
+        Returns:
+            None: 此方法无返回值。
+        """
         self.facade = facade
-        cfg = self.facade.get_runtime_config()
+        cfg = self.facade.get_runtime_config()  # 从外观对象获取运行时配置
+
+        # 将配置值填充到对应的UI控件中
         self.spin_threshold.setValue(int(cfg.ui.force_save_threshold))
         self.spin_undo.setValue(int(cfg.ui.undo_max_actions))
         self.spin_button_scale.setValue(float(cfg.ui.button_scale))
         self.spin_autosave.setValue(int(cfg.ui.db_autosave_minutes))
+
+        # 使用getattr安全获取配置项，防止属性不存在时报错
         self.spin_fp_workers.setValue(int(getattr(cfg.ui, "fingerprint_workers", 0)))
         self.spin_dup_workers.setValue(int(getattr(cfg.ui, "duplicate_compare_workers", 0)))
         self.spin_dup_threshold.setValue(int(getattr(cfg.ui, "duplicate_compare_parallel_threshold", 48)))
@@ -139,19 +202,30 @@ class SettingsPage(QWidget):
         self.spin_general_workers.setValue(int(getattr(cfg.ui, "general_worker_limit", 0)))
         self.spin_fullscan_fp_processes.setValue(int(getattr(cfg.ui, "fullscan_fp_compare_processes", 0)))
 
+        # 设置删除模式下拉框的当前选项，若配置值为空则使用默认值
         idx = self.combo_delete_mode.findData(str(cfg.ui.delete_tracks_mode_default or "move_linked_lyrics"))
-        self.combo_delete_mode.setCurrentIndex(max(0, idx))
+        self.combo_delete_mode.setCurrentIndex(max(0, idx))  # 确保索引非负
+
+        # 设置歌词单元格操作下拉框
         lidx = self.combo_lyrics_cell_action.findData(str(cfg.ui.lyrics_cell_action_default or "change_mapping"))
         self.combo_lyrics_cell_action.setCurrentIndex(max(0, lidx))
 
+        # 设置播放器模式下拉框
         pidx = self.combo_player_mode.findData(str(cfg.ui.player_mode or "external"))
         self.combo_player_mode.setCurrentIndex(max(0, pidx))
 
+        # 设置外部播放器路径输入框
         self.input_player_path.setText(str(cfg.ui.external_player_path or ""))
+
+        # 设置各复选框状态，将配置值转换为布尔值
         self.chk_enable_logs.setChecked(bool(cfg.ui.enable_logs))
         self.chk_empty_confirm.setChecked(bool(cfg.ui.prompt_empty_edit_confirm))
         self.chk_realtime_search.setChecked(bool(getattr(cfg.ui, "realtime_search_enabled", True)))
+
+        # 设置播放器链接端口数值框
         self.spin_player_link_port.setValue(int(getattr(cfg.ui, "player_link_port", 43121)))
+
+        # 触发播放器模式变更事件，更新相关UI状态
         self._on_player_mode_changed()
 
     def refresh_page(self) -> None:
@@ -183,16 +257,37 @@ class SettingsPage(QWidget):
         self.settings_saved.emit()
 
     def _on_player_mode_changed(self) -> None:
-        is_external = str(self.combo_player_mode.currentData()) == "external"
-        self.input_player_path.setEnabled(is_external)
-        self.btn_pick_player.setEnabled(is_external)
+        """当播放器模式改变时触发的槽函数。
+
+        根据当前选择的播放器模式（是否为外部播放器）来启用或禁用相关输入框和按钮。
+
+        参数:
+            self: 实例自身。
+
+        返回值:
+            None
+        """
+        is_external = str(self.combo_player_mode.currentData()) == "external" # 判断当前选中的播放器模式是否为"external"
+        self.input_player_path.setEnabled(is_external) # 根据是否为外部播放器来启用或禁用播放器路径输入框
+        self.btn_pick_player.setEnabled(is_external) # 根据是否为外部播放器来启用或禁用选择播放器的按钮
 
     def _pick_external_player(self) -> None:
+        """选择外部播放器的可执行文件，并更新输入框的路径。
+
+        此方法通过文件对话框让用户选择一个可执行文件，然后将选择的路径显示在输入框中。
+        它是一个实例方法，不接受额外参数，也没有返回值。
+
+        参数：无（除了self）。
+
+        返回值：无。
+        """
+        # 调用QFileDialog.getOpenFileName打开文件对话框，让用户选择可执行文件
+        # 参数：self（父窗口）、对话框标题、默认路径、文件过滤器
         path, _ = QFileDialog.getOpenFileName(
             self,
             "选择外部播放器可执行文件",
-            self.input_player_path.text().strip(),
-            "可执行文件 (*.exe);;所有文件 (*.*)",
+            self.input_player_path.text().strip(),  # 从输入框获取当前文本作为默认路径，并去除首尾空格
+            "可执行文件 (*.exe);;所有文件 (*.*)",  # 定义文件类型过滤器
         )
-        if path:
-            self.input_player_path.setText(path)
+        if path:  # 检查用户是否选择了文件（path非空）
+            self.input_player_path.setText(path)  # 将选择的文件路径设置到输入框中

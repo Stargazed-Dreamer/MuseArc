@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,25 +16,48 @@ class ExportFormat:
 
 
 def _parse_bitrate(value: str | None, default_value: int | None = None) -> int | None:
+    """
+    解析比特率字符串，将其转换为整数。
+
+    参数:
+        value (str | None): 要解析的比特率字符串，可能以"k"或"m"结尾，表示千比特或兆比特。
+        default_value (int | None): 当输入无效时的默认值，默认为None。
+
+    返回值:
+        int | None: 解析后的比特率整数，如果解析失败则返回默认值。
+    """
+    # 如果输入值为空或None，直接返回默认值
     if not value:
         return default_value
+    # 清理字符串：去除首尾空白并转换为小写，以便统一处理
     text = value.strip().lower()
     try:
+        # 检查字符串是否以"k"结尾，表示千比特单位
         if text.endswith("k"):
+            # 移除后缀"k"，转换为浮点数，乘以1000转换为整数比特率
             return int(float(text[:-1]) * 1000)
+        # 检查字符串是否以"m"结尾，表示兆比特单位
         if text.endswith("m"):
+            # 移除后缀"m"，转换为浮点数，乘以1000000转换为整数比特率
             return int(float(text[:-1]) * 1_000_000)
+        # 如果没有单位后缀，直接将字符串转换为整数
         return int(text)
     except ValueError:
+        # 如果转换过程中出现值错误（例如非数字字符串），返回默认值
         return default_value
 
 
 def _iter_frames(value):
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    return [value]
+    """
+    功能：将输入值转换为帧列表，确保输出始终为列表格式。
+    参数：value - 输入值，可以是任意类型（如None、列表或其他单个值）。
+    返回值：一个列表，如果输入为None则返回空列表，如果输入是列表则返回原列表，否则将输入值包装成单元素列表返回。
+    """
+    if value is None:  # 检查输入是否为None
+        return []  # 输入为None时返回空列表
+    if isinstance(value, list):  # 检查输入是否已经是列表类型
+        return value  # 输入为列表时直接返回原列表
+    return [value]  # 输入为其他类型时，将其包装成单元素列表返回
 
 
 class MediaTranscoder:

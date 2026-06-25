@@ -1,4 +1,4 @@
-"""MusePlayer TCP JSON Lines 控制客户端。"""
+﻿"""MusePlayer TCP JSON Lines 控制客户端。"""
 
 from __future__ import annotations
 
@@ -23,8 +23,20 @@ class PlayerClient:
     RECV_BUF = 65536
 
     def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
+        """初始化网络客户端实例，设置连接地址和端口，并初始化套接字对象。
+
+        参数:
+            host (str): 连接目标主机的地址，默认值为 `DEFAULT_HOST`。
+            port (int): 连接目标主机的端口号，默认值为 `DEFAULT_PORT`。
+
+        返回值:
+            无 (None)
+        """
+        # 设置主机地址
         self.host = host
+        # 设置端口号
         self.port = port
+        # 初始化用于实际通信的套接字对象，初始值为空
         self._sock: socket.socket | None = None
 
     # ── 连接管理 ──────────────────────────────────────────
@@ -48,11 +60,24 @@ class PlayerClient:
             raise
 
     def disconnect(self) -> None:
+        """断开当前套接字连接并清理资源。
+
+        功能：
+            关闭底层网络套接字，并将套接字引用重置为 None，以释放资源并指示连接已断开。
+        参数：
+            self (类实例): 类实例本身。
+        返回值：
+            None: 该方法没有返回值。
+        """
+        # 检查套接字是否已存在（即是否已连接）
         if self._sock is not None:
             try:
+                # 尝试关闭套接字连接
                 self._sock.close()
             except Exception:
+                # 捕获并忽略关闭套接字时可能发生的任何异常，确保后续清理代码能执行
                 pass
+            # 将套接字引用重置为 None，标记连接已断开
             self._sock = None
 
     # ── 底层通信 ──────────────────────────────────────────

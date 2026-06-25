@@ -61,11 +61,19 @@ class SortCriteriaWidget(QWidget):
         return super().eventFilter(obj, event)
 
     def _state_symbol(self, state: str) -> str:
-        if state == "asc":
-            return "↑"
-        if state == "desc":
-            return "↓"
-        return "·"
+        """将状态字符串转换为符号表示。
+
+        参数：
+            state (str): 状态字符串，如 "asc" 表示上升，"desc" 表示下降。
+
+        返回值：
+            str: 对应的符号字符串，如 "↑"、"↓" 或 "·"。
+        """
+        if state == "asc":  # 检查状态是否为上升
+            return "↑"      # 返回上升符号
+        if state == "desc": # 检查状态是否为下降
+            return "↓"      # 返回下降符号
+        return "·"          # 其他状态返回默认中性符号
 
     def _reload_items(self) -> None:
         self.list.clear()
@@ -75,19 +83,24 @@ class SortCriteriaWidget(QWidget):
             self.list.addItem(item)
 
     def _cycle_item_state(self, item: QListWidgetItem) -> None:
-        key = item.data(Qt.ItemDataRole.UserRole)
-        for rule in self._rules:
-            if rule.key != key:
+        """功能：循环切换指定项目的排序状态。
+        参数：
+            item (QListWidgetItem): 要切换状态的列表项。
+        返回值：无。
+        """
+        key = item.data(Qt.ItemDataRole.UserRole)  # 从item中提取用户数据键值
+        for rule in self._rules:  # 遍历规则列表
+            if rule.key != key:  # 如果规则键不匹配，则跳过当前规则
                 continue
-            if rule.state == "asc":
-                rule.state = "desc"
-            elif rule.state == "desc":
-                rule.state = "off"
-            else:
-                rule.state = "asc"
-            break
-        self._reload_items()
-        self.changed.emit(self.export_rules())
+            if rule.state == "asc":  # 当前状态为升序
+                rule.state = "desc"  # 切换为降序
+            elif rule.state == "desc":  # 当前状态为降序
+                rule.state = "off"  # 切换为关闭
+            else:  # 当前状态为关闭或其他
+                rule.state = "asc"  # 切换为升序
+            break  # 找到匹配规则后立即退出循环
+        self._reload_items()  # 重新加载列表项
+        self.changed.emit(self.export_rules())  # 发出规则已更改的信号
 
     def _on_order_changed(self, *_args) -> None:
         ordered_keys: list[str] = []

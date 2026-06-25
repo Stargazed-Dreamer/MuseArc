@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
@@ -346,23 +346,55 @@ class RepositoryTracksLyricsMixin:
         return item.lyrics_id
 
     def _lyrics_language_kind(self, lyrics_id: str) -> str:
+        """根据给定的歌词ID，查询并返回其语言类型。
+
+        通过查询数据库获取歌词对应的ext_json字段，解析其中的语言信息。
+        会依次尝试获取 'language_kind' 或 'language' 字段的值，并进行清理和标准化。
+
+        Args:
+            lyrics_id (str): 要查询的歌词唯一标识ID。
+
+        Returns:
+            str: 识别出的语言类型字符串（已转为小写并清理空格）。
+                 如果查询无结果、数据异常或语言类型为未知/混合，则返回空字符串。
+        """
+        # 执行SQL查询，根据lyrics_id从lyrics表中获取ext_json字段
         row = self.conn.execute("SELECT ext_json FROM lyrics WHERE lyrics_id = ? LIMIT 1", (lyrics_id,)).fetchone()
+        # 如果查询结果为空，则返回空字符串
         if not row:
             return ""
+        # 安全地解析JSON数据。处理row可能为空或结构异常的情况
         payload = _safe_json_loads(row[0] if row and len(row) > 0 else "")
+        # 从解析后的字典中尝试获取语言类型字段，依次尝试 'language_kind' 或 'language'
+        # 将获取到的值转为字符串，去除首尾空格，并统一转为小写（casefold），以便后续比较
         value = str(payload.get("language_kind") or payload.get("language") or "").strip().casefold()
+        # 如果最终获取到的语言类型为空、'unknown'或'mixed'，则视为无效，返回空字符串
         if value in {"", "unknown", "mixed"}:
             return ""
+        # 返回有效的语言类型字符串
         return value
 
     def _sync_track_language_from_lyrics_if_unknown(self, track_id: str, lyrics_id: str) -> None:
+        """如果数据库中指定歌曲的语言为'未知'或为空，则从其歌词信息中获取语言并同步更新。
+        Args:
+            track_id (str): 目标歌曲的唯一标识符。
+            lyrics_id (str): 与歌曲关联的歌词信息的唯一标识符。
+        Returns:
+            None: 此方法不返回任何值，其作用是更新数据库。
+        """
+        # 根据歌词ID查询其语言种类
         lang = self._lyrics_language_kind(lyrics_id)
+        # 如果未能从歌词中获取到有效语言，则直接结束方法
         if not lang:
             return
+        # 查询目标歌曲在数据库中的当前语言记录
         row = self.conn.execute("SELECT language_kind FROM tracks WHERE track_id = ? LIMIT 1", (track_id,)).fetchone()
+        # 安全地获取当前语言值：若查询结果为空或结构异常则默认为空字符串，然后去除首尾空白并统一为小写以便比较
         current = str(row[0] if row and len(row) > 0 else "").strip().casefold()
+        # 如果歌曲语言已知且不是“unknown”或空字符串，则无需更新，直接返回
         if current not in {"", "unknown"}:
             return
+        # 更新数据库中对应歌曲的语言种类和最后更新时间
         self.conn.execute(
             "UPDATE tracks SET language_kind = ?, updated_at = ? WHERE track_id = ?",
             (lang, _utc_now_iso(), track_id),

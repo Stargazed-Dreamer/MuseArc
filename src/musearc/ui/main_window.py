@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 """主窗口装配层。
 
@@ -156,63 +156,94 @@ class MainWindow(MainWindowLogicMixin, QMainWindow):
         self._tool_windows: list[QWidget] = []
 
     def _resolve_track_play_path(self, row: dict) -> str:
+        """解析曲目播放路径。
+
+        功能：根据提供的行字典，解析并返回曲目的播放路径。优先使用库内归档路径，如果不存在则使用源路径。
+
+        参数：
+            row (dict): 包含曲目信息的字典，应有键'storage_relpath'和'source_fullpath'。
+
+        返回值：
+            str: 解析后的路径字符串，如果路径不存在则返回空字符串。
+        """
         # 设计约束：优先使用库内归档路径，保证可重复播放与路径稳定性。
-        rel = str(row.get("storage_relpath", "") or "").strip()
-        if rel:
-            path = (self.facade.library_root / rel).resolve()
-            if path.exists():
-                return str(path)
-        source = str(row.get("source_fullpath", "") or "").strip()
-        if source:
-            path = Path(source)
-            if path.exists():
-                return str(path.resolve())
-        return ""
+        rel = str(row.get("storage_relpath", "") or "").strip()  # 获取存储的相对路径，并清理空格
+        if rel:  # 如果相对路径存在
+            path = (self.facade.library_root / rel).resolve()  # 构建完整路径并解析符号链接
+            if path.exists():  # 检查路径是否存在
+                return str(path)  # 返回路径字符串
+        source = str(row.get("source_fullpath", "") or "").strip()  # 获取源文件的完整路径，并清理空格
+        if source:  # 如果源路径存在
+            path = Path(source)  # 创建路径对象
+            if path.exists():  # 检查路径是否存在
+                return str(path.resolve())  # 解析并返回路径字符串
+        return ""  # 如果都没有找到，返回空字符串
 
     def queue_and_play_tracks(self, rows: list[dict], *, start_track_id: str | None = None) -> bool:
-        if not rows:
+        """功能：将给定的行列表排队并播放轨道，可选择从特定轨道开始播放。
+
+        参数：
+            rows (list[dict]): 字典列表，每个字典包含轨道的元数据，如文件名、标题等。
+            start_track_id (str | None, optional): 指定开始播放的轨道ID。如果为None，则从第一个轨道开始。
+
+        返回值：
+            bool: 如果成功开始播放，则返回True；否则返回False。
+        """
+        if not rows:  # 检查输入行列表是否为空
             return False
-        paths: list[str] = []
-        labels: list[str] = []
-        start_index = 0
-        for idx, row in enumerate(rows):
-            path = self._resolve_track_play_path(row if isinstance(row, dict) else {})
-            if not path:
+        paths: list[str] = []  # 存储可播放文件的路径列表
+        labels: list[str] = []  # 存储每个轨道的显示标签
+        start_index = 0  # 初始化起始播放索引
+        for idx, row in enumerate(rows):  # 遍历每一行
+            path = self._resolve_track_play_path(row if isinstance(row, dict) else {})  # 解析轨道的播放路径
+            if not path:  # 如果路径无效，跳过此行
                 continue
-            paths.append(path)
+            paths.append(path)  # 添加有效路径
+            # 获取标签：优先使用文件名，其次标题，最后使用路径的文件名部分
             labels.append(str(row.get("file_name", "") or row.get("title", "") or Path(path).name))
-            tid = str(row.get("track_id", "") or "")
+            tid = str(row.get("track_id", "") or "")  # 获取轨道ID
+            # 检查是否匹配指定的起始轨道ID
             if start_track_id and tid and tid == start_track_id:
-                start_index = len(paths) - 1
-        if not paths:
-            QMessageBox.information(self, "播放", "未找到可播放文件。")
-            return False
-        return self.player_bar.play_queue(paths, start_index=start_index, labels=labels)
+                start_index = len(paths) - 1  # 更新起始索引为当前路径的索引
+        if not paths:  # 如果没有可播放路径
+            QMessageBox.information(self, "播放", "未找到可播放文件。")  # 显示提示信息
+            return False  # 返回False表示失败
+        return self.player_bar.play_queue(paths, start_index=start_index, labels=labels)  # 调用播放器排队并播放，返回结果
 
     def queue_and_play_paths(self, paths: list[str], *, start_path: str | None = None, start_sec: int = 0) -> bool:
-        cleaned: list[str] = []
-        start_index = 0
-        normalized_start = str(start_path or "").strip()
-        if normalized_start:
+        """处理路径列表并播放队列。
+
+        参数：
+            paths (list[str]): 要播放的路径列表。
+            start_path (str | None, 可选): 指定开始播放的路径。默认为None，从第一个路径开始。
+            start_sec (int, 可选): 指定开始播放的秒数。默认为0。
+
+        返回值：
+            bool: 如果成功开始播放，返回True；否则返回False。
+        """
+        cleaned: list[str] = []  # 初始化一个空列表，用于存储规范化的路径
+        start_index = 0  # 初始化起始索引为0
+        normalized_start = str(start_path or "").strip()  # 规范化起始路径，去除空白
+        if normalized_start:  # 如果起始路径非空
             try:
-                normalized_start = str(Path(normalized_start).resolve())
+                normalized_start = str(Path(normalized_start).resolve())  # 尝试将起始路径转换为绝对路径
             except Exception:
-                normalized_start = str(start_path or "").strip()
-        for raw in paths:
-            text = str(raw or "").strip()
-            if not text:
+                normalized_start = str(start_path or "").strip()  # 如果解析失败，保持原样
+        for raw in paths:  # 遍历原始路径列表
+            text = str(raw or "").strip()  # 规范化每个路径，去除空白
+            if not text:  # 如果路径为空，跳过
                 continue
             try:
-                normalized_text = str(Path(text).resolve())
+                normalized_text = str(Path(text).resolve())  # 尝试将路径转换为绝对路径
             except Exception:
-                normalized_text = text
-            cleaned.append(normalized_text)
-            if normalized_start and normalized_text == normalized_start:
-                start_index = len(cleaned) - 1
-        if not cleaned:
-            QMessageBox.information(self, "播放", "未找到可播放文件。")
-            return False
-        return self.player_bar.play_queue(cleaned, start_index=start_index, start_sec=start_sec)
+                normalized_text = text  # 如果解析失败，使用原始文本
+            cleaned.append(normalized_text)  # 将规范化后的路径添加到cleaned列表
+            if normalized_start and normalized_text == normalized_start:  # 如果当前路径匹配起始路径
+                start_index = len(cleaned) - 1  # 更新起始索引为当前索引
+        if not cleaned:  # 如果cleaned列表为空
+            QMessageBox.information(self, "播放", "未找到可播放文件。")  # 显示错误消息
+            return False  # 返回False表示失败
+        return self.player_bar.play_queue(cleaned, start_index=start_index, start_sec=start_sec)  # 调用player_bar播放队列
 
     def release_player_for_file_ops(self) -> None:
         if getattr(self, "player_bar", None) is None:

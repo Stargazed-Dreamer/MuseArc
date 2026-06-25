@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -159,10 +159,19 @@ class ImportReport:
     file_states: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        payload = asdict(self)
-        payload["started_at"] = self.started_at.isoformat()
-        payload["finished_at"] = self.finished_at.isoformat()
-        return payload
+        """
+        将对象转换为字典，其中时间戳属性转换为ISO格式字符串。
+
+        参数：
+            self: 当前对象实例
+
+        返回：
+            dict: 包含对象属性的字典，时间戳以ISO格式表示。
+        """
+        payload = asdict(self)  # 使用asdict函数将对象转换为字典
+        payload["started_at"] = self.started_at.isoformat()  # 将started_at转换为ISO格式字符串
+        payload["finished_at"] = self.finished_at.isoformat()  # 将finished_at转换为ISO格式字符串
+        return payload  # 返回转换后的字典
 
 
 @dataclass(slots=True)

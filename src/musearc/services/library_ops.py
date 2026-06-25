@@ -21,16 +21,27 @@ class LibraryOpsService:
         return self.repo.resolve_reviews(review_ids, status=status)
 
     def delete_tracks(self, track_ids: list[str], *, mode: str = "move_linked_lyrics") -> int:
-        count = self.repo.soft_delete_tracks(track_ids)
-        if count > 0:
-            self.repo.cleanup_relations_after_soft_delete(track_ids)
-            if mode == "move_linked_lyrics":
-                linked = self.repo.linked_lyrics_ids_for_tracks(track_ids)
-                if linked:
-                    self.repo.move_lyrics_to_trash(linked)
-            elif mode == "unlink_only":
-                self.repo.unlink_lyrics_for_tracks(track_ids)
-        return count
+        """删除指定的音轨，并根据模式处理关联的歌词。
+
+        功能：软删除指定的音轨，并清理相关关系。根据 mode 参数决定如何处理关联的歌词。
+        参数：
+            track_ids (list[str]): 要删除的音轨ID列表。
+            mode (str, 可选): 处理模式。默认为 "move_linked_lyrics"。
+                - "move_linked_lyrics": 将关联的歌词移动到垃圾箱。
+                - "unlink_only": 仅取消关联歌词，不移动。
+        返回值：
+            int: 实际删除的音轨数量。
+        """
+        count = self.repo.soft_delete_tracks(track_ids)  # 调用仓库层软删除音轨，获取删除数量
+        if count > 0:  # 如果有音轨被成功删除
+            self.repo.cleanup_relations_after_soft_delete(track_ids)  # 清理软删除后可能残留的关系数据
+            if mode == "move_linked_lyrics":  # 如果模式为移动关联歌词到垃圾箱
+                linked = self.repo.linked_lyrics_ids_for_tracks(track_ids)  # 查询与这些音轨关联的歌词ID列表
+                if linked:  # 如果存在关联歌词
+                    self.repo.move_lyrics_to_trash(linked)  # 将这些关联歌词移至垃圾箱
+            elif mode == "unlink_only":  # 如果模式为仅取消关联，不删除歌词
+                self.repo.unlink_lyrics_for_tracks(track_ids)  # 取消音轨与歌词的关联关系
+        return count  # 返回删除的音轨数量
 
     def restore_tracks(self, track_ids: list[str]) -> int:
         count = self.repo.restore_tracks(track_ids)
@@ -126,9 +137,21 @@ class LibraryOpsService:
         return self.repo.restore_lyrics(lyrics_ids)
 
     def create_fullscan_work(self, name: str, track_ids: list[str]) -> str:
-        work_id = new_id("work")
-        self.repo.create_fullscan_work(work_id, name, track_ids)
-        return work_id
+        """
+        创建一个新的全扫描工作。
+
+        该方法生成一个唯一的工作ID，并调用仓库方法存储工作信息。
+
+        参数：
+            name (str): 工作的名称。
+            track_ids (list[str]): 需要扫描的轨道ID列表。
+
+        返回值：
+            str: 生成的工作ID。
+        """
+        work_id = new_id("work")  # 生成一个新的唯一工作ID
+        self.repo.create_fullscan_work(work_id, name, track_ids)  # 调用仓库方法，将工作信息持久化存储
+        return work_id  # 返回生成的工作ID
 
     def list_fullscan_works(self) -> list[dict]:
         return self.repo.list_fullscan_works()
