@@ -866,6 +866,14 @@ class RepositoryTracksLyricsMixin:
             (review_id, str(item.kind), item.title, json.dumps(item.payload, ensure_ascii=False), item.priority, _utc_now_iso()),
         )
 
+    def update_review_payload(self, review_id: str, payload: dict) -> int:
+        """更新待审查记录的 payload。"""
+        cursor = self.conn.execute(
+            "UPDATE review_queue SET payload_json = ? WHERE review_id = ? AND status = 'pending'",
+            (json.dumps(payload, ensure_ascii=False), review_id),
+        )
+        return int(cursor.rowcount or 0)
+
     def list_pending_reviews(self, limit: int = 100) -> list[dict]:
         """\u4ed3\u50a8\u65b9\u6cd5\uff1alist_pending_reviews\u3002"""
         rows = self.conn.execute(

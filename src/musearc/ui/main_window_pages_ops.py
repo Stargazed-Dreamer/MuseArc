@@ -900,6 +900,11 @@ class TrashPage(QWidget):
         row.addWidget(self.btn_delete_file)
         row.addWidget(self.btn_delete_meta)
         row.addStretch(1)  # 在按钮右侧添加弹性空间
+        row.addWidget(QLabel("搜索"))
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("搜索回收站中的类型、文件名、标题、艺术家或 ID")
+        self.search_edit.setClearButtonEnabled(True)
+        row.addWidget(self.search_edit, 1)
 
         # 创建分割器（水平分割布局）
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -986,6 +991,27 @@ class TrashPage(QWidget):
         # 将按钮行和分割器添加到主布局
         root.addLayout(row)
         root.addWidget(split, 1)  # 分割器拉伸因子为1
+
+        excluded_row = QHBoxLayout()
+        excluded_row.addWidget(QLabel("已排除路径"))
+        self.excluded_search_edit = QLineEdit()
+        self.excluded_search_edit.setPlaceholderText("搜索已排除的音频源路径")
+        self.excluded_search_edit.setClearButtonEnabled(True)
+        excluded_row.addWidget(self.excluded_search_edit, 1)
+        self.btn_remove_excluded = QPushButton("删除选中路径")
+        excluded_row.addWidget(self.btn_remove_excluded)
+        root.addLayout(excluded_row)
+
+        self.excluded_model = DictTableModel([ColumnDef("path", "路径")])
+        self.excluded_table = QTableView()
+        self.excluded_table.setModel(self.excluded_model)
+        self.excluded_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.excluded_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.excluded_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.excluded_table.setAlternatingRowColors(True)
+        self.excluded_table.horizontalHeader().setStretchLastSection(True)
+        _install_copy_support(self.excluded_table)
+        root.addWidget(self.excluded_table, 0)
     
         # 创建状态标签并添加到布局
         self.status = QLabel("-")
@@ -995,6 +1021,12 @@ class TrashPage(QWidget):
         self.btn_restore.clicked.connect(self.restore_selected)       # 恢复选中项目
         self.btn_delete_file.clicked.connect(self.delete_selected_files)  # 删除选中文件
         self.btn_delete_meta.clicked.connect(self.delete_selected_metadata)  # 删除选中元数据
+        self.btn_remove_excluded.clicked.connect(self.remove_selected_excluded_paths)
+        self.search_edit.textChanged.connect(self._apply_trash_filter)
+        self.excluded_search_edit.textChanged.connect(self._apply_excluded_filter)
+
+        self._trash_rows: list[dict] = []
+        self._excluded_rows: list[dict] = []
 
         # 加载回收站数据
         self.reload_trash()
@@ -1003,6 +1035,7 @@ class TrashPage(QWidget):
         _apply_button_scale(self.btn_restore, scale)
         _apply_button_scale(self.btn_delete_file, scale)
         _apply_button_scale(self.btn_delete_meta, scale)
+        _apply_button_scale(self.btn_remove_excluded, scale)
 
     def set_facade(self, facade: MuseArcFacade) -> None:
         """设置实例的facade属性并重新加载trash。
@@ -1036,21 +1069,47 @@ class TrashPage(QWidget):
         返回值：
             None
         """
-        # 获取所有已删除项目（限制为200万条记录）
-        rows = self.facade.list_deleted_items(limit=2_000_000)
-    
-        # 筛选出文件仍存在的记录（file_exists字段为真）
-        left_rows = [r for r in rows if bool(r.get("file_exists"))]
-    
-        # 筛选出仅元数据的记录（文件不存在）
-        right_rows = [r for r in rows if not bool(r.get("file_exists"))]
-    
-        # 设置左右视图模型的数据源
+        self._trash_rows = self.facade.list_deleted_items(limit=2_000_000)
+        self._excluded_rows = [{"path": value} for value in self.facade.list_excluded_import_paths()]
+        self._apply_trash_filter()
+        self._apply_excluded_filter()
+
+    def _apply_trash_filter(self) -> None:
+        query = self.search_edit.text().strip().casefold()
+        rows = self._trash_rows
+        if query:
+            fields = ("item_type_label", "file_name", "title", "artist", "album", "item_id", "storage_relpath")
+            rows = [row for row in rows if any(query in str(row.get(field, "") or "").casefold() for field in fields)]
+        left_rows = [row for row in rows if bool(row.get("file_exists"))]
+        right_rows = [row for row in rows if not bool(row.get("file_exists"))]
         self.left_model.set_rows(left_rows)
         self.right_model.set_rows(right_rows)
-    
-        # 更新状态栏显示回收站统计信息
-        self.status.setText(f"回收站 共 {len(rows)} 条 | 文件仍在 {len(left_rows)} | 仅元数据 {len(right_rows)}")
+        self.status.setText(
+            f"回收站 共 {len(self._trash_rows)} 条 | 当前显示 {len(rows)} | 文件仍在 {len(left_rows)} | 仅元数据 {len(right_rows)}"
+        )
+
+    def _apply_excluded_filter(self) -> None:
+        query = self.excluded_search_edit.text().strip().casefold()
+        rows = self._excluded_rows
+        if query:
+            rows = [row for row in rows if query in str(row.get("path", "") or "").casefold()]
+        self.excluded_model.set_rows(rows)
+
+    def remove_selected_excluded_paths(self) -> None:
+        rows = self._selected_rows_from(self.excluded_table, self.excluded_model)
+        paths = [str(row.get("path", "") or "") for row in rows if str(row.get("path", "") or "").strip()]
+        if not paths:
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除已排除路径",
+            f"确定删除选中的 {len(paths)} 条路径吗？删除后对应文件可再次参与扫描导入。",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        removed = self.facade.remove_excluded_import_paths(paths)
+        self.reload_trash()
+        self.status.setText(f"已删除 {removed} 条排除路径；对应文件可再次参与扫描导入")
 
     def _selected_rows_from(self, table: QTableView, model: DictTableModel) -> list[dict]:
         """从QTableView中获取选中的行，并从DictTableModel中提取对应行的数据。

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from musearc.core.hashing import sha1_text
 from musearc.infra.media.tag_writer import write_basic_metadata_tags
-from musearc.services.importer import ImportService
+from musearc.services.importer import ImportService, list_excluded_source_paths, remove_excluded_source_paths
 from musearc.services.library_ops import LibraryOpsService
 
 logger = logging.getLogger(__name__)
@@ -262,6 +262,17 @@ class FacadeLibraryMixin:
             )
         out.sort(key=lambda r: str(r.get("deleted_at", "")), reverse=True)
         return out[: max(1, int(limit))]
+
+    def list_excluded_import_paths(self) -> list[str]:
+        """列出导入时会被历史跳过记录排除的音频源路径。"""
+        return list_excluded_source_paths(self.ctx.layout.root)
+
+    def remove_excluded_import_paths(self, source_paths: list[str]) -> int:
+        """删除历史排除路径，使对应文件可以再次参与扫描导入。"""
+        removed = remove_excluded_source_paths(self.ctx.layout.root, source_paths)
+        if removed > 0:
+            self._log(f"remove_excluded_import_paths count={removed}")
+        return removed
 
     def restore_tracks(self, track_ids: list[str]) -> int:
         """\u0046\u0061\u0063\u0061\u0064\u0065 \u65b9\u6cd5\uff1arestore_tracks\u3002"""

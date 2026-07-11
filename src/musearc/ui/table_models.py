@@ -154,7 +154,6 @@ class DictTableModel(QAbstractTableModel):
         # 将新值写入行数据中对应的键
         row[key] = new_value
         # 发出数据更改信号，通知视图和相关观察者数据已更新
-        self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
         # 记录调试日志：显示编辑的键、旧值和新值
         logger.debug("[DictTableModel] 编辑: key=%s old=%r new=%r", key, old_value, new_value)
         # 打印日志到控制台
@@ -167,9 +166,10 @@ class DictTableModel(QAbstractTableModel):
             # 如果行 ID 存在，则异步发射 field_edited 信号
             if row_id:
                 # 导入 QTimer，用于实现异步调用（避免信号嵌套可能导致的递归问题）
-                from PySide6.QtCore import QTimer
                 # 使用 QTimer.singleShot 在下一个事件循环中异步发射信号，传递行 ID、键名和新值
-                QTimer.singleShot(0, lambda rid=row_id, k=key, v=new_value: self.field_edited.emit(rid, k, v))
+                self.field_edited.emit(row_id, key, new_value)
+
+        self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
     
         # 数据设置成功，返回 True
         return True

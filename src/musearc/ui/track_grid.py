@@ -1,9 +1,10 @@
 ﻿from __future__ import annotations
 
 import logging
+import time
 
 from PySide6.QtCore import QItemSelection, QItemSelectionModel, QModelIndex, Qt, QTimer, Signal
-from PySide6.QtGui import QKeyEvent, QKeySequence, QMouseEvent, QShortcut
+from PySide6.QtGui import QColor, QKeyEvent, QKeySequence, QMouseEvent, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -187,6 +188,7 @@ class TrackTableView(QTableView):
         self._drag_preview_base: set[int] | None = None
         self._dragging = False
         self._press_row: int | None = None
+        self._last_edit_click: tuple[int, int, float] | None = None
 
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -356,7 +358,10 @@ class TrackTableView(QTableView):
 
         # 如果控制器指定了焦点行且范围有效，则设置当前项到该行
         if self.controller.focus_row is not None and 0 <= self.controller.focus_row < self.row_count():
-            self.setCurrentIndex(self.model().index(self.controller.focus_row, 0))
+            self.selectionModel().setCurrentIndex(
+                self.model().index(self.controller.focus_row, 0),
+                QItemSelectionModel.SelectionFlag.NoUpdate,
+            )
 
         # 解除信号阻塞，恢复正常的信号发射
         self.blockSignals(False)
@@ -387,10 +392,22 @@ class TrackTableView(QTableView):
                 return
             super().mousePressEvent(event)
             self.selected_rows()
-            if self.edit_mode and event.button() == Qt.MouseButton.LeftButton and idx.isValid():
+            if event.button() == Qt.MouseButton.LeftButton and idx.isValid():
                 model = self.model()
                 if model is not None and bool(model.flags(idx) & Qt.ItemFlag.ItemIsEditable):
-                    self.edit(idx)
+                    now = time.monotonic()
+                    previous = self._last_edit_click
+                    repeated_click = bool(
+                        previous
+                        and previous[0] == idx.row()
+                        and previous[1] == idx.column()
+                        and now - previous[2] <= QApplication.doubleClickInterval() / 1000.0
+                    )
+                    self._last_edit_click = (idx.row(), idx.column(), now)
+                    if self.edit_mode or repeated_click:
+                        row = idx.row()
+                        column = idx.column()
+                        QTimer.singleShot(0, lambda r=row, c=column: self.edit(self.model().index(r, c)))
             return
 
         idx = self.indexAt(event.pos())
@@ -538,6 +555,13 @@ class TrackTableView(QTableView):
         editable = bool(model.flags(idx) & Qt.ItemFlag.ItemIsEditable)
         logger.debug("[TrackTableView] 双击: row=%d col=%d key=%s editable=%s", idx.row(), idx.column(), key, editable)
         print(f"[edit] 双击触发: row={idx.row()} col={idx.column()} key={key} editable={editable}")
+        if editable:
+            self.setCurrentIndex(idx)
+            row = idx.row()
+            column = idx.column()
+            QTimer.singleShot(0, lambda r=row, c=column: self.edit(self.model().index(r, c)))
+            event.accept()
+            return
         super().mouseDoubleClickEvent(event)
 
     def _move_cursor_and_edit(self, row_delta: int, col_delta: int) -> bool:
@@ -565,6 +589,9 @@ class TrackTableView(QTableView):
         """
         key = event.key()  # 获取按下的键码
         mods = event.modifiers()  # 获取修饰键状态（如Shift、Ctrl等）
+        if self.state() == QAbstractItemView.State.EditingState:
+            super().keyPressEvent(event)
+            return
         if self.edit_mode:  # 如果处于编辑模式
             if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):  # 如果按下回车键或Enter键
                 if bool(mods & Qt.KeyboardModifier.ShiftModifier):  # 检查Shift键是否按下
@@ -1282,15 +1309,15 @@ class TrackGridWidget(QWidget):
         session = self._bulk_edit_session
         # 如果没有批量编辑会话，则恢复选择并返回
         if not session:
-            self._restore_selection_by_ids(keep_ids, track_id)
+            QTimer.singleShot(0, lambda ids=keep_ids, tid=track_id: self._restore_selection_by_ids(ids, tid))
             return
         # 检查会话中的源轨道ID是否与当前track_id匹配，不匹配则恢复选择并返回
         if str(session.get("source_track_id")) != str(track_id):
-            self._restore_selection_by_ids(keep_ids, track_id)
+            QTimer.singleShot(0, lambda ids=keep_ids, tid=track_id: self._restore_selection_by_ids(ids, tid))
             return
         # 检查会话中的键是否与当前key匹配，不匹配则恢复选择并返回
         if str(session.get("key")) != str(key):
-            self._restore_selection_by_ids(keep_ids, track_id)
+            QTimer.singleShot(0, lambda ids=keep_ids, tid=track_id: self._restore_selection_by_ids(ids, tid))
             return
 
         # 从会话中获取目标轨道ID列表，过滤掉空字符串和与当前track_id相同的ID
@@ -1298,7 +1325,7 @@ class TrackGridWidget(QWidget):
         # 如果没有有效的目标轨道ID，则清空会话、恢复选择并返回
         if not target_ids:
             self._bulk_edit_session = None
-            self._restore_selection_by_ids(keep_ids, track_id)
+            QTimer.singleShot(0, lambda ids=keep_ids, tid=track_id: self._restore_selection_by_ids(ids, tid))
             return
 
         # 应用值到所有目标轨道
@@ -1309,7 +1336,7 @@ class TrackGridWidget(QWidget):
         # 清空批量编辑会话
         self._bulk_edit_session = None
         # 恢复之前的选择状态
-        self._restore_selection_by_ids(keep_ids, track_id)
+        QTimer.singleShot(0, lambda ids=keep_ids, tid=track_id: self._restore_selection_by_ids(ids, tid))
 
     def _on_context_menu_requested(self, global_pos) -> None:
         self.context_menu_requested.emit(global_pos, self.selected_tracks())
@@ -1389,6 +1416,7 @@ class LyricsTableModel(DictTableModel):
         super().__init__(columns, parent)
         # 初始化排序状态映射字典，键为列名，值为排序状态（如"asc"或"desc"），用于记录每列的排序方向
         self._sort_state_map: dict[str, str] = {}
+        self.visual_selected_track_ids: set[str] = set()
 
     def set_header_sort_states(self, state_map: dict[str, str]) -> None:
         """设置表头排序状态。
@@ -1452,7 +1480,31 @@ class LyricsTableModel(DictTableModel):
             key = self.columns[index.column()].key  # 获取列的键
             value = row.get(key, "")  # 获取值，键不存在时返回空字符串
             return "" if value is None else str(value)  # 返回处理后的值
+        if role == Qt.ItemDataRole.BackgroundRole:
+            row = self.row_at(index.row()) or {}
+            lyrics_id = str(row.get("lyrics_id", "") or "")
+            if lyrics_id and lyrics_id in self.visual_selected_track_ids:
+                return QColor(85, 170, 255, 110)
         return super().data(index, role)  # 调用父类方法处理其他角色
+
+    def selected_track_ids_from_rows(self, rows: list[int]) -> list[str]:
+        lyrics_ids: list[str] = []
+        for row_index in rows:
+            row = self.row_at(row_index) or {}
+            lyrics_id = str(row.get("lyrics_id", "") or "")
+            if lyrics_id:
+                lyrics_ids.append(lyrics_id)
+        return lyrics_ids
+
+    def set_visual_selected_track_ids(self, lyrics_ids: set[str]) -> None:
+        self.visual_selected_track_ids = {str(value) for value in lyrics_ids if str(value)}
+        if self.rowCount() <= 0 or self.columnCount() <= 0:
+            return
+        self.dataChanged.emit(
+            self.index(0, 0),
+            self.index(self.rowCount() - 1, self.columnCount() - 1),
+            [Qt.ItemDataRole.BackgroundRole],
+        )
 
     def setData(self, index: QModelIndex, value, role: int = Qt.ItemDataRole.EditRole):
         if role != Qt.ItemDataRole.EditRole or not index.isValid():
@@ -1468,10 +1520,10 @@ class LyricsTableModel(DictTableModel):
         if new_value == old_value:
             return False
         row[key] = new_value
-        self.dataChanged.emit(index, index)
         lyrics_id = str(row.get("lyrics_id", "") or "")
         if lyrics_id:
-            QTimer.singleShot(0, lambda lid=lyrics_id, k=key, v=new_value: self.lyrics_field_edited.emit(lid, k, v))
+            self.lyrics_field_edited.emit(lyrics_id, key, new_value)
+        self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
         return True
 
 

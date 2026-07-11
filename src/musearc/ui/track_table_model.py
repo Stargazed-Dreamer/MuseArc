@@ -516,15 +516,17 @@ class TrackTableModel(QAbstractTableModel):
             emit_value = parsed
 
         # 发出数据已改变的信号，通知视图进行局部刷新
-        self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
+        # Persist before notifying the view; dataChanged may close the editor.
         # 安排模型进行重建（如果需要，用于更新排序、过滤等）
-        self._schedule_rebuild()
         # 如果存在有效的 track_id，则发射 track_field_edited 信号，通知外部组件（如播放队列、数据库）数据已变更
         if track_id:
             logger.info("[TrackTableModel] 将发射 track_field_edited: tid=%s key=%s value=%r", track_id, emit_key, emit_value)
             print(f"[edit] 发射信号: tid={track_id} key={emit_key} value={emit_value!r}")
             # 使用 QTimer.singleShot(0, ...) 将信号发射延迟到当前槽函数执行完毕、事件循环空闲时进行，避免潜在的重入问题
-            QTimer.singleShot(0, lambda tid=track_id, k=emit_key, v=emit_value: self.track_field_edited.emit(tid, k, v))
+            self.track_field_edited.emit(track_id, emit_key, emit_value)
+            self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
+            if self._edit_requires_rebuild(emit_key):
+                self._schedule_rebuild()
         else:
             logger.warning("[TrackTableModel] setData 完成 but track_id 为空，无法发射信号")
         # 指示数据设置成功
@@ -698,6 +700,19 @@ class TrackTableModel(QAbstractTableModel):
     def _flush_rebuild(self) -> None:
         self._rebuild_pending = False
         self._rebuild_display()
+
+    def _edit_requires_rebuild(self, key: str) -> bool:
+        if self.group_by == key:
+            return True
+        active_sort_keys = {
+            str(rule.get("key", ""))
+            for rule in self.sort_rules
+            if rule.get("state") in {"asc", "desc"}
+        }
+        if active_sort_keys:
+            return key in active_sort_keys
+        default_key = "custom_order" if self.custom_order_enabled else "file_name"
+        return key == default_key
 
     def _sort_tracks(self, rows: list[dict]) -> list[dict]:
         """

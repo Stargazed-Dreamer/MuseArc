@@ -110,13 +110,22 @@ def run_import_path(
         if str(v).strip()
     }
     skipped_audio_path_keys = service._load_skipped_audio_path_keys()
+    new_skipped_audio_path_keys: set[str] = set()
     seen_lyrics_path_keys = service._load_seen_lyrics_path_keys()
     pending_review_rows = repo.list_pending_reviews(limit=500_000)
     pending_audio_path_keys: set[str] = set()
     pending_audio_fp_digests: set[str] = set()
     pending_audio_source_sha256: set[str] = set()
+    pending_audio_candidates: list[dict] = []
     pending_lyrics_relpath_keys: set[str] = set()
     pending_lyrics_text_hashes: set[str] = set()
+
+    def review_float(payload: dict, key: str) -> float:
+        try:
+            return float(payload.get(key, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
     for review in pending_review_rows:
         payload = review.get("payload") if isinstance(review, dict) else {}
         if not isinstance(payload, dict):
@@ -130,12 +139,67 @@ def run_import_path(
         review_sha = str(payload.get("source_sha256", "") or "").strip().lower()
         if review_sha:
             pending_audio_source_sha256.add(review_sha)
+        review_fp_payload = str(payload.get("fingerprint_payload", "") or "").strip()
+        if review_fp_payload:
+            pending_audio_candidates.append(
+                {
+                    "review_id": str(review.get("review_id", "") or ""),
+                    "track_id": f"review:{review.get('review_id', '')}",
+                    "path": review_path,
+                    "title": str(payload.get("title", "") or payload.get("title_hint", "") or ""),
+                    "artist": str(payload.get("artist", "") or ""),
+                    "duration_sec": review_float(payload, "duration_sec"),
+                    "source_ext": str(payload.get("source_ext", "") or ""),
+                    "storage_format": str(payload.get("source_ext", "") or ""),
+                    "quality_score": review_float(payload, "quality_score"),
+                    "fingerprint_digest": review_fp,
+                    "fingerprint_payload": review_fp_payload,
+                    "fingerprint_hash32": payload.get("fingerprint_hash32"),
+                    "source_sha256": review_sha,
+                    "review_payload": payload,
+                }
+            )
         lyrics_source = str(payload.get("lyrics_source", "")).replace("\\", "/").strip()
         if lyrics_source:
             pending_lyrics_relpath_keys.add(lyrics_source.casefold())
         lyrics_hash = str(payload.get("lyrics_text_hash", "") or "").strip().lower()
         if lyrics_hash:
             pending_lyrics_text_hashes.add(lyrics_hash)
+
+    def enqueue_audio_review(item: ReviewItem) -> str:
+        review_id = service._enqueue_review(repo, item)
+        payload = item.payload if isinstance(item.payload, dict) else {}
+        review_path = str(payload.get("path", "") or "").strip()
+        if review_path:
+            pending_audio_path_keys.add(_normalize_source_path_key(review_path))
+        review_fp = str(payload.get("fingerprint_digest", "") or "").strip().lower()
+        if review_fp:
+            pending_audio_fp_digests.add(review_fp)
+        review_sha = str(payload.get("source_sha256", "") or "").strip().lower()
+        if review_sha:
+            pending_audio_source_sha256.add(review_sha)
+        review_fp_payload = str(payload.get("fingerprint_payload", "") or "").strip()
+        if review_fp_payload:
+            pending_audio_candidates.append(
+                {
+                    "review_id": review_id,
+                    "track_id": f"review:{review_id}",
+                    "path": review_path,
+                    "title": str(payload.get("title", "") or payload.get("title_hint", "") or ""),
+                    "artist": str(payload.get("artist", "") or ""),
+                    "duration_sec": review_float(payload, "duration_sec"),
+                    "source_ext": str(payload.get("source_ext", "") or ""),
+                    "storage_format": str(payload.get("source_ext", "") or ""),
+                    "quality_score": review_float(payload, "quality_score"),
+                    "fingerprint_digest": review_fp,
+                    "fingerprint_payload": review_fp_payload,
+                    "fingerprint_hash32": payload.get("fingerprint_hash32"),
+                    "source_sha256": review_sha,
+                    "review_payload": payload,
+                }
+            )
+        return review_id
+
     skipped_audio_registry_dirty = False
     seen_lyrics_registry_dirty = False
 
@@ -197,6 +261,7 @@ def run_import_path(
             return
         if key not in skipped_audio_path_keys:
             skipped_audio_path_keys.add(key)
+            new_skipped_audio_path_keys.add(key)
             skipped_audio_registry_dirty = True
 
     def flush_skipped_audio_registry() -> None:
@@ -204,7 +269,8 @@ def run_import_path(
         nonlocal skipped_audio_registry_dirty
         if not skipped_audio_registry_dirty:
             return
-        service._save_skipped_audio_path_keys(skipped_audio_path_keys)
+        service._add_skipped_audio_path_keys(new_skipped_audio_path_keys)
+        new_skipped_audio_path_keys.clear()
         skipped_audio_registry_dirty = False
 
     def mark_seen_lyrics_path(source_path: Path) -> None:
@@ -542,8 +608,7 @@ def run_import_path(
                 state.review_items += 1
                 suggest_pool = get_duplicate_candidates(probe.duration_sec, tolerance_sec=30.0)
                 suggestions = service._suggest_similar_tracks_by_name(candidate.path.stem, suggest_pool)
-                service._enqueue_review(
-                    repo,
+                enqueue_audio_review(
                     ReviewItem(
                         kind=ReviewKind.FILE_ISSUE,
                         title=issue_title,
@@ -577,13 +642,107 @@ def run_import_path(
             fp_payload = service.dependencies.fingerprint.encode_vector(fp.vector)
             fp_digest = str(fp.digest or "").strip().lower()
             fp_hash32 = service.dependencies.fingerprint.fingerprint_hash32(fp_payload)
-            if fp_digest and fp_digest in pending_audio_fp_digests:
+            pending_digest_candidate = next(
+                (
+                    row
+                    for row in pending_audio_candidates
+                    if str(row.get("fingerprint_digest", "") or "") == fp_digest
+                ),
+                None,
+            )
+            if fp_digest and fp_digest in pending_audio_fp_digests and pending_digest_candidate is None:
                 state.duplicate_tracks += 1
                 set_skipped(relpath, "音频指纹已在待审查队列", source_path=candidate.path)
                 mark_processed(relpath)
                 return
             new_ext_payload = _build_track_ext_payload(probe)
             set_processing(relpath, "源去重")
+
+            if pending_audio_candidates:
+                pending_decision = service.duplicate_evaluator.decide(
+                    new_payload=fp_payload,
+                    new_quality=quality,
+                    new_title=title,
+                    new_artist=artist,
+                    new_duration_sec=probe.duration_sec,
+                    new_source_ext=candidate.ext,
+                    new_hash32=fp_hash32,
+                    candidates=pending_audio_candidates,
+                )
+                pending_match = next(
+                    (
+                        row
+                        for row in pending_audio_candidates
+                        if str(row.get("track_id", "") or "") == str(pending_decision.existing_track_id or "")
+                    ),
+                    None,
+                )
+                if pending_match and pending_decision.decision == DuplicateDecision.KEEP_EXISTING:
+                    existing_review_id = str(pending_match.get("review_id", "") or "")
+                    existing_payload = pending_match.get("review_payload")
+                    if existing_review_id and isinstance(existing_payload, dict):
+                        merged_payload = dict(existing_payload)
+                        metadata_changed = False
+                        for field, value in (
+                            ("title", title),
+                            ("artist", artist),
+                            ("album", probe.album),
+                            ("source_ext", candidate.ext),
+                        ):
+                            if not str(merged_payload.get(field, "") or "").strip() and str(value or "").strip():
+                                merged_payload[field] = str(value)
+                                metadata_changed = True
+                        if metadata_changed:
+                            repo.update_review_payload(existing_review_id, merged_payload)
+                            pending_match["review_payload"] = merged_payload
+                            pending_match["title"] = str(merged_payload.get("title", "") or "")
+                            pending_match["artist"] = str(merged_payload.get("artist", "") or "")
+                    state.duplicate_tracks += 1
+                    set_skipped(relpath, "近似音频已在待审查队列且保留已有", source_path=candidate.path)
+                    mark_processed(relpath)
+                    return
+                if pending_match and pending_decision.decision == DuplicateDecision.KEEP_NEW:
+                    replaced_review_id = str(pending_match.get("review_id", "") or "")
+                    if replaced_review_id:
+                        repo.set_reviews_status([replaced_review_id], "ignored")
+                    replaced_path = str(pending_match.get("path", "") or "").strip()
+                    if replaced_path:
+                        pending_audio_path_keys.discard(_normalize_source_path_key(replaced_path))
+                    replaced_digest = str(pending_match.get("fingerprint_digest", "") or "").strip().lower()
+                    if replaced_digest:
+                        pending_audio_fp_digests.discard(replaced_digest)
+                    replaced_sha = str(pending_match.get("source_sha256", "") or "").strip().lower()
+                    if replaced_sha:
+                        pending_audio_source_sha256.discard(replaced_sha)
+                    pending_audio_candidates.remove(pending_match)
+                elif pending_match and pending_decision.decision == DuplicateDecision.REVIEW:
+                    state.review_items += 1
+                    enqueue_audio_review(
+                        ReviewItem(
+                            kind=ReviewKind.DUPLICATE,
+                            title="疑似与待审查音频重复",
+                            payload={
+                                "path": str(candidate.path),
+                                "title": title,
+                                "artist": artist,
+                                "duration_sec": probe.duration_sec,
+                                "source_ext": candidate.ext,
+                                "quality_score": quality,
+                                "fingerprint_digest": fp_digest,
+                                "fingerprint_payload": fp_payload,
+                                "fingerprint_hash32": fp_hash32,
+                                "score": pending_decision.score,
+                                "existing_review_id": str(pending_match.get("review_id", "") or ""),
+                                "existing_review_path": str(pending_match.get("path", "") or ""),
+                                "reason": pending_decision.reason,
+                                "deferred_import": True,
+                            },
+                            priority=3,
+                        )
+                    )
+                    set_review(relpath, "疑似与待审查音频重复")
+                    mark_processed(relpath)
+                    return
 
             dedupe_candidates = get_duplicate_candidates(probe.duration_sec)
             decision = service.duplicate_evaluator.decide(
@@ -614,14 +773,20 @@ def run_import_path(
 
             if decision.decision == DuplicateDecision.REVIEW:
                 state.review_items += 1
-                service._enqueue_review(
-                    repo,
+                enqueue_audio_review(
                     ReviewItem(
                         kind=ReviewKind.DUPLICATE,
                         title="疑似重复音频",
                         payload={
                             "path": str(candidate.path),
+                            "title": title,
+                            "artist": artist,
+                            "duration_sec": probe.duration_sec,
+                            "source_ext": candidate.ext,
+                            "quality_score": quality,
                             "fingerprint_digest": fp_digest,
+                            "fingerprint_payload": fp_payload,
+                            "fingerprint_hash32": fp_hash32,
                             "score": decision.score,
                             "existing_track_id": decision.existing_track_id,
                             "reason": decision.reason,
@@ -648,12 +813,15 @@ def run_import_path(
             except Exception as exc:
                 state.errors.append(f"copy_failed:{candidate.path}:{exc}")
                 state.review_items += 1
-                service._enqueue_review(
-                    repo,
+                enqueue_audio_review(
                     ReviewItem(
                         kind=ReviewKind.FILE_ISSUE,
                         title="复制归档失败",
-                        payload={"path": str(candidate.path), "error": str(exc)},
+                        payload={
+                            "path": str(candidate.path),
+                            "error": str(exc),
+                            "fingerprint_digest": fp_digest,
+                        },
                         priority=3,
                     ),
                 )
@@ -724,12 +892,16 @@ def run_import_path(
                     return
                 state.errors.append(f"insert_failed:{candidate.path}:{exc}")
                 state.review_items += 1
-                service._enqueue_review(
-                    repo,
+                enqueue_audio_review(
                     ReviewItem(
                         kind=ReviewKind.FILE_ISSUE,
                         title="写入数据库失败",
-                        payload={"path": str(candidate.path), "error": str(exc)},
+                        payload={
+                            "path": str(candidate.path),
+                            "error": str(exc),
+                            "source_sha256": source_sha,
+                            "fingerprint_digest": fp_digest,
+                        },
                         priority=3,
                     ),
                 )
@@ -848,8 +1020,7 @@ def run_import_path(
                 else:
                     state.review_items += 1
                     pending_review_reason = pending_review_reason or "预期替换旧版本但未删除"
-                    service._enqueue_review(
-                        repo,
+                    enqueue_audio_review(
                         ReviewItem(
                             kind=ReviewKind.DUPLICATE,
                             title="预期替换旧版本但未删除",
@@ -956,8 +1127,7 @@ def run_import_path(
                 except MediaCommandError as exc:
                     state.errors.append(f"probe_failed:{candidate.path}:{exc}")
                     state.review_items += 1
-                    service._enqueue_review(
-                        repo,
+                    enqueue_audio_review(
                         ReviewItem(
                             kind=ReviewKind.FILE_ISSUE,
                             title="音频探测失败",
@@ -971,8 +1141,7 @@ def run_import_path(
 
                 if probe.duration_sec < service.runtime_cfg.thresholds.min_track_duration_sec:
                     state.review_items += 1
-                    service._enqueue_review(
-                        repo,
+                    enqueue_audio_review(
                         ReviewItem(
                             kind=ReviewKind.FILE_ISSUE,
                             title="疑似试听或哑文件",

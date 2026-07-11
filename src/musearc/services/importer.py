@@ -13,6 +13,7 @@ import html
 import os
 import re
 import shutil
+import threading
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -941,6 +942,67 @@ def _normalize_source_path_key(value: str | Path) -> str:
     return text.replace("\\", "/").strip().casefold()
 
 
+_SKIPPED_PATH_REGISTRY_LOCK = threading.RLock()
+
+
+def _skipped_path_registry_file(library_root: Path) -> Path:
+    return Path(library_root) / "manifests" / "imports" / "skipped_audio_paths.json"
+
+
+def _load_excluded_source_path_keys(library_root: Path) -> set[str]:
+    target = _skipped_path_registry_file(library_root)
+    if not target.exists():
+        return set()
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    rows = payload.get("paths") if isinstance(payload, dict) else []
+    if not isinstance(rows, list):
+        return set()
+    return {_normalize_source_path_key(value) for value in rows if str(value).strip()}
+
+
+def _save_excluded_source_path_keys(library_root: Path, keys: set[str]) -> None:
+    target = _skipped_path_registry_file(library_root)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"version": 1, "paths": sorted({str(value).strip() for value in keys if str(value).strip()})}
+    temp_path = target.with_suffix(f"{target.suffix}.tmp")
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.replace(target)
+
+
+def list_excluded_source_paths(library_root: Path) -> list[str]:
+    with _SKIPPED_PATH_REGISTRY_LOCK:
+        return sorted(_load_excluded_source_path_keys(library_root))
+
+
+def add_excluded_source_paths(library_root: Path, source_paths: set[str]) -> int:
+    targets = {_normalize_source_path_key(value) for value in source_paths if str(value).strip()}
+    if not targets:
+        return 0
+    with _SKIPPED_PATH_REGISTRY_LOCK:
+        keys = _load_excluded_source_path_keys(library_root)
+        merged = keys | targets
+        added = len(merged) - len(keys)
+        if added > 0:
+            _save_excluded_source_path_keys(library_root, merged)
+        return added
+
+
+def remove_excluded_source_paths(library_root: Path, source_paths: list[str]) -> int:
+    targets = {_normalize_source_path_key(value) for value in source_paths if str(value).strip()}
+    if not targets:
+        return 0
+    with _SKIPPED_PATH_REGISTRY_LOCK:
+        keys = _load_excluded_source_path_keys(library_root)
+        remaining = keys - targets
+        removed = len(keys) - len(remaining)
+        if removed > 0:
+            _save_excluded_source_path_keys(library_root, remaining)
+        return removed
+
+
 class ImportService:
     def __init__(self, library_root: Path, runtime_cfg: RuntimeConfig):
         """\u521d\u59cb\u5316\u5bfc\u5165\u670d\u52a1\u53ca\u5176\u4f9d\u8d56\u7ec4\u4ef6\u3002"""
@@ -981,31 +1043,28 @@ class ImportService:
     def _skipped_path_registry_file(self) -> Path:
         """\u8fd4\u56de\u5386\u53f2\u8df3\u8fc7\u97f3\u9891\u8def\u5f84\u7d22\u5f15\u6587\u4ef6\u8def\u5f84\u3002"""
         # 历史跳过音频路径索引：用于后续导入快速排除重复来源。
-        return self.library_root / "manifests" / "imports" / "skipped_audio_paths.json"
+        return _skipped_path_registry_file(self.library_root)
 
     def _load_skipped_audio_path_keys(self) -> set[str]:
         """\u52a0\u8f7d\u5386\u53f2\u8df3\u8fc7\u97f3\u9891\u8def\u5f84\u7d22\u5f15\u3002"""
-        target = self._skipped_path_registry_file()
-        if not target.exists():
-            return set()
-        try:
-            payload = json.loads(target.read_text(encoding="utf-8"))
-        except Exception:
-            return set()
-        rows = payload.get("paths") if isinstance(payload, dict) else []
-        if not isinstance(rows, list):
-            return set()
-        return {_normalize_source_path_key(v) for v in rows if str(v).strip()}
+        with _SKIPPED_PATH_REGISTRY_LOCK:
+            return _load_excluded_source_path_keys(self.library_root)
 
     def _save_skipped_audio_path_keys(self, keys: set[str]) -> None:
         """\u6301\u4e45\u5316\u5386\u53f2\u8df3\u8fc7\u97f3\u9891\u8def\u5f84\u7d22\u5f15\u3002"""
-        target = self._skipped_path_registry_file()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "version": 1,
-            "paths": sorted({str(v).strip() for v in keys if str(v).strip()}),
-        }
-        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        with _SKIPPED_PATH_REGISTRY_LOCK:
+            _save_excluded_source_path_keys(self.library_root, keys)
+
+    def _add_skipped_audio_path_keys(self, keys: set[str]) -> int:
+        return add_excluded_source_paths(self.library_root, keys)
+
+    def list_excluded_source_paths(self) -> list[str]:
+        """列出会在后续导入中被跳过的历史音频源路径。"""
+        return list_excluded_source_paths(self.library_root)
+
+    def remove_excluded_source_paths(self, source_paths: list[str]) -> int:
+        """从历史跳过路径索引中移除指定路径。"""
+        return remove_excluded_source_paths(self.library_root, source_paths)
 
     def _lyrics_seen_registry_file(self) -> Path:
         """\u8fd4\u56de\u5386\u53f2\u5df2\u5904\u7406\u6b4c\u8bcd\u8def\u5f84\u7d22\u5f15\u6587\u4ef6\u8def\u5f84\u3002"""
@@ -1327,9 +1386,11 @@ class ImportService:
             if target.exists() and target.is_file():
                 target.unlink(missing_ok=True)
 
-    def _enqueue_review(self, repo: LibraryRepository, item: ReviewItem) -> None:
+    def _enqueue_review(self, repo: LibraryRepository, item: ReviewItem) -> str:
         """\u5411\u5ba1\u67e5\u961f\u5217\u5199\u5165\u4e00\u6761\u5ba1\u67e5\u9879\u3002"""
-        repo.enqueue_review(new_id("rev"), item)
+        review_id = new_id("rev")
+        repo.enqueue_review(review_id, item)
+        return review_id
 
     def _write_manifest(self, report: ImportReport) -> None:
         """\u5199\u5165\u5bfc\u5165\u62a5\u544a\u6e05\u5355\u6587\u4ef6\u3002"""

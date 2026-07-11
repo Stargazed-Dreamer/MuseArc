@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QListWidget,
     QMenu,
@@ -507,7 +508,10 @@ class ImportManagementPage(QWidget):
         self.stats_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.stats_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.stats_table.setAlternatingRowColors(True)
-        self.stats_table.horizontalHeader().setStretchLastSection(True)
+        self.stats_table.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.stats_table.horizontalHeader().setStretchLastSection(False)
+        self.stats_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.stats_table.setColumnWidth(4, 520)
         _install_copy_support(self.stats_table)
         self.stats_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
@@ -527,7 +531,10 @@ class ImportManagementPage(QWidget):
         self.playlist_import_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.playlist_import_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.playlist_import_table.setAlternatingRowColors(True)
-        self.playlist_import_table.horizontalHeader().setStretchLastSection(True)
+        self.playlist_import_table.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.playlist_import_table.horizontalHeader().setStretchLastSection(False)
+        self.playlist_import_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.playlist_import_table.setColumnWidth(6, 520)
         _install_copy_support(self.playlist_import_table)
 
         root.addLayout(row1)

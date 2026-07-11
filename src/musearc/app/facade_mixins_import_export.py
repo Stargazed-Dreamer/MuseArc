@@ -412,12 +412,29 @@ class FacadeImportExportMixin:
     def _convert_museplayer_playback_stats(payload: dict, file_path: str) -> dict:
         """将 MusePlayer playback_stats.json 转换为 MuseArc 内部格式。"""
         tracks_dict = payload.get("tracks", {})
+        library_tracks: dict = {}
+        library_path = Path(file_path).expanduser().resolve().with_name("library.json")
+        if library_path.exists():
+            try:
+                library_payload = json.loads(library_path.read_text(encoding="utf-8-sig"))
+                candidate_tracks = library_payload.get("tracks") if isinstance(library_payload, dict) else {}
+                if isinstance(candidate_tracks, dict):
+                    library_tracks = candidate_tracks
+            except Exception:
+                library_tracks = {}
         tracks_list: list[dict] = []
-        for _key, entry in tracks_dict.items():
+        for entry_key, entry in tracks_dict.items():
             if not isinstance(entry, dict):
                 continue
+            museplayer_track_id = str(entry.get("track_id", "") or entry_key or "").strip()
+            library_entry = library_tracks.get(museplayer_track_id)
+            if not isinstance(library_entry, dict):
+                library_entry = {}
             tracks_list.append({
-                "track_id": str(entry.get("track_id", "") or "").strip(),
+                "track_id": str(library_entry.get("source_track_id", "") or museplayer_track_id).strip(),
+                "storage_relpath": str(library_entry.get("source_storage_relpath", "") or "").replace("\\", "/").strip(),
+                "source_sha256": str(library_entry.get("source_sha256", "") or "").strip().lower(),
+                "museplayer_track_id": museplayer_track_id,
                 "stats": {
                     "play_count": entry.get("play_count", 0),
                     "manual_play_count": entry.get("active_play_count", 0),
@@ -662,6 +679,11 @@ class FacadeImportExportMixin:
             if not isinstance(contributions, dict):
                 contributions = {}
 
+            has_stats_history = any(
+                str(row.get("playlist_hash", "")) == hash_value
+                for row in history
+            )
+
             impacted_track_ids: set[str] = set()
             removed_rows = 0
             for track_id, mapping in list(contributions.items()):
@@ -674,15 +696,16 @@ class FacadeImportExportMixin:
                 if not mapping:
                     contributions.pop(track_id, None)
 
-            if removed_rows <= 0:
+            if removed_rows <= 0 and not has_stats_history:
                 raise ValueError("playlist_hash_not_found")
 
-            self._recompute_stats_contributions_and_write_tags(
-                repo=repo,
-                contributions=contributions,
-                impacted_track_ids=impacted_track_ids,
-                by_id=by_id,
-            )
+            if impacted_track_ids:
+                self._recompute_stats_contributions_and_write_tags(
+                    repo=repo,
+                    contributions=contributions,
+                    impacted_track_ids=impacted_track_ids,
+                    by_id=by_id,
+                )
 
             history = [r for r in history if str(r.get("playlist_hash", "")) != hash_value]
             playlist_history = [r for r in playlist_history if str(r.get("playlist_hash", "")) != hash_value]

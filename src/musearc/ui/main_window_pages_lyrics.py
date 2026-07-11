@@ -4,13 +4,14 @@ import logging
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QItemSelectionModel, QModelIndex, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QModelIndex, Qt, QTimer, Signal
 from PySide6.QtGui import QKeyEvent
-from PySide6.QtWidgets import QApplication, QAbstractItemView, QCheckBox, QComboBox, QDialog, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTableView, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QAbstractItemView, QCheckBox, QComboBox, QDialog, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QVBoxLayout, QWidget
 
 from musearc.app.facade import MuseArcFacade
 from musearc.ui.table_models import ColumnDef
-from musearc.ui.track_grid import LyricsTableModel, _copy_selected_cells, _install_copy_support, _safe_int
+from musearc.ui.selection import SelectionController, SelectionMode
+from musearc.ui.track_grid import LyricsTableModel, TrackTableView, _copy_selected_cells, _install_copy_support, _safe_int
 from musearc.ui.main_window_helpers import (
     TrackPickerDialog,
     _clear_line_edit_with_undo,
@@ -136,7 +137,10 @@ class LyricsManagementPage(QWidget):
         )
     
         # 创建并配置表格视图
-        self.table = QTableView()
+        self.selection = SelectionController()
+        self._selected_lyrics_ids_memory: set[str] = set()
+        self._restoring_selection = False
+        self.table = TrackTableView(self.selection)
         self.table.setModel(self.model)  # 设置数据模型
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)  # 行选择模式
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)  # 支持多选
@@ -182,6 +186,7 @@ class LyricsManagementPage(QWidget):
         self.chk_preview.toggled.connect(self._on_toggle_preview)  # 预览复选框切换
         self.table.clicked.connect(self._on_click_cell)  # 表格单击
         self.table.doubleClicked.connect(self._on_double_click_cell)  # 表格双击
+        self.table.ctrl_edit_requested.connect(self._on_ctrl_edit_requested)
         self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)  # 表头点击（排序）
         self.table.horizontalHeader().sectionMoved.connect(lambda *_args: self._sync_sort_from_header())  # 列移动同步排序状态
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)  # 设置自定义右键菜单策略
@@ -191,7 +196,7 @@ class LyricsManagementPage(QWidget):
     
         # 连接选择变化信号以刷新预览，需先检查选择模型是否存在
         if self.table.selectionModel() is not None:
-            self.table.selectionModel().selectionChanged.connect(lambda *_args: self._refresh_preview())
+            self.table.selectionModel().selectionChanged.connect(self._on_table_selection_changed)
     
         # 为操作按钮安装行功能快捷键（F3开始）
         _install_row_function_shortcuts(
@@ -253,6 +258,12 @@ class LyricsManagementPage(QWidget):
         self._all_rows = self.facade.list_lyrics(limit=200_000)
         for row in self._all_rows:
             row["lyrics_language"] = str(row.get("lyrics_language", "") or "unknown")
+        available_ids = {
+            str(row.get("lyrics_id", "") or "")
+            for row in self._all_rows
+            if str(row.get("lyrics_id", "") or "")
+        }
+        self._selected_lyrics_ids_memory.intersection_update(available_ids)
         self.apply_filter()
 
     def _is_realtime_search_enabled(self) -> bool:
@@ -349,18 +360,10 @@ class LyricsManagementPage(QWidget):
         """
         # 从行字典中安全地获取指定键对应的值，若键不存在则默认为空字符串
         value = row.get(key, "")
-        # 如果键是行数（"line_count"），则将其安全转换为整数，转换失败则返回0
+        # 所有返回值使用统一的二元组结构，避免数字和字符串在同一列中直接比较。
         if key == "line_count":
-            return _safe_int(value, 0)
-        # 将获取的值转换为字符串，如果值为 None 则使用空字符串
-        text = str(value or "")
-        # 尝试将字符串文本转换为浮点数以进行数值排序
-        try:
-            return float(text)
-        # 如果转换失败（例如值为非数字字符串），则捕获异常
-        except Exception:
-            # 返回原始文本的小写不敏感形式，以确保字符串排序时忽略大小写
-            return text.casefold()
+            return (0, _safe_int(value, 0))
+        return (1, str(value or "").casefold())
 
     def _sort_rows_by_rules(self, rows: list[dict]) -> list[dict]:
         out = list(rows)
@@ -408,6 +411,10 @@ class LyricsManagementPage(QWidget):
         返回值：
             None（无返回值，直接更新界面显示）
         """
+        if self.selection.mode == SelectionMode.MULTI:
+            selected_ids = set(self._selected_lyrics_ids_memory)
+        else:
+            selected_ids = set(self.model.selected_track_ids_from_rows(self.table.selected_rows()))
         # 获取搜索框文本，去除首尾空格并转为小写（用于不区分大小写的匹配）
         token = self.search_input.text().strip().casefold()
         # 获取分组下拉框当前选中的值，未选择时默认为 "none"
@@ -442,22 +449,49 @@ class LyricsManagementPage(QWidget):
         if group_key and group_key != "none":
             rows.sort(key=lambda r: str(r.get(group_key, "")).casefold())
         # 将筛选排序后的数据设置到表格模型中
-        self.model.set_rows(rows)
+        self._restoring_selection = True
+        try:
+            self.model.set_rows(rows)
+            selected_rows = [
+                row_index
+                for row_index, row in enumerate(rows)
+                if str(row.get("lyrics_id", "") or "") in selected_ids
+            ]
+            self.table.set_selected_rows(selected_rows)
+        finally:
+            self._restoring_selection = False
         # 刷新预览面板
         self._refresh_preview()
 
+    def _on_table_selection_changed(self, *_args) -> None:
+        if not self._restoring_selection:
+            self._remember_visible_selection()
+        self._refresh_preview()
+
+    def _remember_visible_selection(self) -> None:
+        visible_ids = {
+            str(row.get("lyrics_id", "") or "")
+            for row in self.model.rows
+            if str(row.get("lyrics_id", "") or "")
+        }
+        selected_ids = set(self.model.selected_track_ids_from_rows(self.table.selected_rows()))
+        if self.selection.mode == SelectionMode.MULTI:
+            self._selected_lyrics_ids_memory.difference_update(visible_ids)
+            self._selected_lyrics_ids_memory.update(selected_ids)
+        else:
+            self._selected_lyrics_ids_memory = selected_ids
+
     def _selected_rows(self) -> list[dict]:
-        if self.table.selectionModel() is None:
-            return []
-        selected = self.table.selectionModel().selectedRows()
         out: list[dict] = []
-        for idx in selected:
-            row = self.model.row_at(idx.row())
+        for row_index in self.table.selected_rows():
+            row = self.model.row_at(row_index)
             if row:
                 out.append(row)
         return out
 
     def _selected_lyrics_ids(self) -> list[str]:
+        if self.selection.mode == SelectionMode.MULTI:
+            return sorted(self._selected_lyrics_ids_memory)
         return [str(r.get("lyrics_id", "")) for r in self._selected_rows() if r.get("lyrics_id")]
 
     def _column_key_at(self, index: QModelIndex) -> str:
@@ -492,15 +526,10 @@ class LyricsManagementPage(QWidget):
             dict: 选中行的数据字典，当没有选中行时返回None
         """
         # 检查表格的选择模型是否已初始化，如果未初始化则直接返回None
-        if self.table.selectionModel() is None:
-            return None
-        # 获取所有选中的行索引列表
-        selected = self.table.selectionModel().selectedRows()
-        # 如果没有选中任何行，则返回None
+        selected = self.table.selected_rows()
         if not selected:
             return None
-        # 返回第一行选中行对应的数据字典
-        return self.model.row_at(selected[0].row())
+        return self.model.row_at(selected[0])
 
     def _refresh_preview(self) -> None:
         if not self.chk_preview.isChecked():
@@ -666,6 +695,12 @@ class LyricsManagementPage(QWidget):
         if self.chk_edit_mode.isChecked() and key in {"file_name", "lyrics_title", "lyrics_artist", "lyrics_album", "lyrics_author"}:
             self.table.edit(index)
 
+    def _on_ctrl_edit_requested(self, index: QModelIndex) -> None:
+        if not index.isValid():
+            return
+        if bool(self.model.flags(index) & Qt.ItemFlag.ItemIsEditable):
+            self.table.edit(index)
+
     def _on_lyrics_field_edited(self, lyrics_id: str, key: str, value: object) -> None:
         """当歌词字段被编辑时调用的处理函数。
 
@@ -757,12 +792,13 @@ class LyricsManagementPage(QWidget):
         返回值:
             None
         """
-        mode = (
-            QAbstractItemView.SelectionMode.MultiSelection  # 如果checked为True，选择多选模式
-            if checked
-            else QAbstractItemView.SelectionMode.SingleSelection  # 否则选择单选模式
-        )
-        self.table.setSelectionMode(mode)  # 应用选择模式到表格视图
+        current_ids = set(self.model.selected_track_ids_from_rows(self.table.selected_rows()))
+        if checked:
+            self._selected_lyrics_ids_memory.update(current_ids)
+        else:
+            self._selected_lyrics_ids_memory = current_ids
+        mode = SelectionMode.MULTI if checked else SelectionMode.NORMAL
+        self.table.set_mode(mode)
 
     def _invert_selection(self) -> None:
         """反选当前表格视图中的行。
@@ -781,10 +817,8 @@ class LyricsManagementPage(QWidget):
         # 如果行数为0或负数，直接返回
         if total <= 0:
             return
-        # 获取表格视图的选择模型
-        sm = self.table.selectionModel()
         # 使用集合快速存储当前已选中行的行号
-        selected = {idx.row() for idx in sm.selectedRows()}
+        selected = set(self.table.selected_rows())
 
         # 定义内部函数，用于计算需要反选的目标行
         def _compute_targets(progress, is_cancelled):
@@ -817,26 +851,18 @@ class LyricsManagementPage(QWidget):
             # 从结果中提取目标行号，并转换为整数列表
             rows = [int(v) for v in payload.get("rows", [])]
             # 如果任务被取消且结果为空，则直接返回，不执行后续操作
-            if bool(payload.get("cancelled")) and not rows:
+            if bool(payload.get("cancelled")):
                 return
         else:
             # 对于小数据量，直接同步调用计算函数
             payload = _compute_targets(lambda *_args: None, lambda: False)
             rows = [int(v) for v in payload.get("rows", [])]
 
-        # 开始执行实际的选择更新操作
-        # 首先清除表格当前的所有选择
-        sm.clearSelection()
-        # 定义选择模式：行选择（即整行选择）
-        mode = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
-        # 遍历所有需要反选的行，并将其选中
-        for row in rows:
-            # 获取该行第一列的模型索引
-            idx = model.index(row, 0)
-            # 使用选择模型选中该行
-            sm.select(idx, mode)
+        self.table.set_selected_rows(rows)
+        self._remember_visible_selection()
 
     def _on_toggle_edit_mode(self, checked: bool) -> None:
+        self.table.set_edit_mode(checked)
         if checked:
             self.table.setEditTriggers(
                 QAbstractItemView.EditTrigger.SelectedClicked
