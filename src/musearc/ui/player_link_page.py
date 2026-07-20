@@ -1,4 +1,4 @@
-﻿"""播放器联动管理页面。"""
+"""播放器联动管理页面。"""
 
 from __future__ import annotations
 
@@ -11,9 +11,12 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
+    QDialogButtonBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMenu,
     QMessageBox,
     QPushButton,
@@ -241,6 +244,78 @@ class _FetchFavoritesWorker(QObject):
             self.finished.emit([], f"导入红心失败: {exc}")
 
 
+class _ImportPlayerPlaylistWorker(QObject):
+    """从播放器拉取指定歌单，匹配曲库后返回可加入 MuseArc 歌单的 track_id 列表。
+
+    数据库写操作（create_playlist / add_tracks_to_playlist）由主线程在回调中执行，
+    Worker 只做网络 IO 和内存匹配，避免跨线程 DB 访问。
+    """
+
+    finished = Signal(list, int, str, str)
+    # matched_track_ids, external_count, playlist_name, message
+
+    def __init__(self, client: PlayerClient, arc_rows: list[dict], playlist_id: str):
+        super().__init__()
+        self.client = client
+        self.arc_rows = arc_rows
+        self.playlist_id = playlist_id
+
+    def run(self) -> None:
+        logger.info("[PlayerLink] 开始从播放器导入歌单 id=%s", self.playlist_id)
+        try:
+            playlist = None
+            try:
+                playlist = self.client.get_playlist(self.playlist_id)
+                logger.info("[PlayerLink] get_playlist(%s) 成功", self.playlist_id)
+            except PlayerClientError as exc:
+                logger.warning("[PlayerLink] get_playlist 失败: %s, 回退到 current_playlist", exc)
+                try:
+                    self.client.load_playlist(self.playlist_id)
+                    playlist = self.client.current_playlist()
+                    logger.info("[PlayerLink] load_playlist 回退成功")
+                except PlayerClientError as exc2:
+                    logger.warning("[PlayerLink] 回退也失败: %s", exc2)
+
+            if not playlist or not isinstance(playlist, dict):
+                self.finished.emit([], 0, "", "无法获取该歌单内容")
+                return
+
+            playlist_name = str(playlist.get("name", "") or self.playlist_id)
+            tracks = playlist.get("tracks") or []
+            if not isinstance(tracks, list) or not tracks:
+                self.finished.emit([], 0, playlist_name, "该歌单为空")
+                return
+
+            # 构建 sha256 -> track_id 索引
+            sha_to_track_id: dict[str, str] = {}
+            for row in self.arc_rows:
+                sha = str(row.get("source_sha256", "") or "").strip().lower()
+                if sha:
+                    sha_to_track_id[sha] = str(row.get("track_id", "") or "")
+
+            matched_track_ids: list[str] = []
+            external = 0
+            for trk in tracks:
+                if not isinstance(trk, dict):
+                    continue
+                sha = str(trk.get("source_sha256", "") or "").strip().lower()
+                track_id = sha_to_track_id.get(sha) if sha else None
+                if track_id:
+                    matched_track_ids.append(track_id)
+                else:
+                    external += 1
+
+            logger.info(
+                "[PlayerLink] 歌单 %s 导入匹配完成: %d 命中, %d 外部",
+                playlist_name, len(matched_track_ids), external,
+            )
+            msg = f"歌单「{playlist_name}」共 {len(tracks)} 首，曲库命中 {len(matched_track_ids)} 首"
+            self.finished.emit(matched_track_ids, external, playlist_name, msg)
+        except Exception as exc:
+            logger.exception("[PlayerLink] 从播放器导入歌单异常")
+            self.finished.emit([], 0, "", f"导入失败: {exc}")
+
+
 # ── 主页面 ──────────────────────────────────────────────────
 
 
@@ -299,9 +374,10 @@ class PlayerLinkPage(QWidget):
         self.btn_play_selected = QPushButton("播放选中歌曲")
         self.btn_delete = QPushButton("联动删除歌曲")
         self.btn_import_fav = QPushButton("从播放器导入红心")
+        self.btn_import_playlist = QPushButton("从播放器导入歌单")
         # 初始化时禁用所有工具栏按钮，直到连接成功
         for btn in (self.btn_refresh, self.btn_locate, self.btn_play_selected,
-                     self.btn_delete, self.btn_import_fav):
+                     self.btn_delete, self.btn_import_fav, self.btn_import_playlist):
             btn.setEnabled(False)
             toolbar.addWidget(btn)
         toolbar.addStretch(1)
@@ -382,6 +458,7 @@ class PlayerLinkPage(QWidget):
         self.btn_play_selected.clicked.connect(self._on_play_selected)
         self.btn_delete.clicked.connect(self._on_delete)
         self.btn_import_fav.clicked.connect(self._on_import_favorites)
+        self.btn_import_playlist.clicked.connect(self._on_import_playlist)
 
     # ── 公共接口 ──────────────────────────────────────────
 
@@ -394,7 +471,7 @@ class PlayerLinkPage(QWidget):
         for btn in (
             self.btn_connect, self.btn_disconnect, self.btn_refresh,
             self.btn_locate, self.btn_play_selected, self.btn_delete,
-            self.btn_import_fav,
+            self.btn_import_fav, self.btn_import_playlist,
         ):
             # 遍历一组功能按钮，统一设置它们的最小高度
             btn.setMinimumHeight(max(30, int(28 * scale)))
@@ -416,7 +493,7 @@ class PlayerLinkPage(QWidget):
         self.btn_disconnect.setEnabled(connected)
         self.spin_port.setEnabled(not connected)
         for btn in (self.btn_refresh, self.btn_locate, self.btn_play_selected,
-                     self.btn_delete, self.btn_import_fav):
+                     self.btn_delete, self.btn_import_fav, self.btn_import_playlist):
             btn.setEnabled(connected)
 
     def _on_connect(self) -> None:
@@ -708,6 +785,155 @@ class PlayerLinkPage(QWidget):
         # 显示成功添加的歌曲数量
         QMessageBox.information(self, "导入红心", f"已将 {count} 首歌曲加入收藏歌单。")
         # 发射信号，通知其他组件库已更新
+        self.library_changed.emit()
+
+    # ── 从播放器导入歌单 ──────────────────────────────────
+
+    def _on_import_playlist(self) -> None:
+        """从播放器选择一个已有歌单并导入到 MuseArc。
+
+        流程：
+        1. 调用 client.state() 拿到播放器所有歌单列表（轻量调用，主线程执行）。
+        2. 弹出对话框让用户选择一个歌单。
+        3. 启动 _ImportPlayerPlaylistWorker 在子线程拉取歌单内容并匹配曲库。
+        4. 回调中在 MuseArc 创建/复用同名歌单并写入 track_ids。
+        """
+        if not self._connected:
+            return
+
+        try:
+            state = self._get_player_playlists()
+        except PlayerClientError as exc:
+            QMessageBox.warning(self, "从播放器导入歌单", f"获取播放器歌单列表失败: {exc}")
+            return
+
+        if not state:
+            QMessageBox.information(self, "从播放器导入歌单", "播放器中暂无可用歌单。")
+            return
+
+        # 过滤掉 all_songs（与 MuseArc 整个曲库等价）和 favorites（已有"导入红心"按钮处理）
+        candidates = [
+            p for p in state
+            if str(p.get("id", "")) not in {"all_songs", "favorites"}
+        ]
+        if not candidates:
+            QMessageBox.information(self, "从播放器导入歌单", "播放器中暂无可用歌单。")
+            return
+
+        playlist_id, playlist_name = self._pick_player_playlist(candidates)
+        if not playlist_id:
+            return
+
+        self.label_status.setText(f"导入歌单「{playlist_name}」中...")
+        arc_rows = self.facade.list_tracks(limit=2_000_000)
+        logger.info("[PlayerLink] 读取曲库 %d 条，开始导入播放器歌单 %s", len(arc_rows), playlist_id)
+        self._run_worker(
+            _ImportPlayerPlaylistWorker(self._client, arc_rows, playlist_id),
+            self._on_import_playlist_done,
+        )
+
+    def _get_player_playlists(self) -> list[dict]:
+        """获取播放器端所有歌单摘要（id/name/count）。"""
+        state = self._client.state()
+        playlists = state.get("playlists") or []
+        if not isinstance(playlists, list):
+            return []
+        return [p for p in playlists if isinstance(p, dict)]
+
+    def _pick_player_playlist(self, candidates: list[dict]) -> tuple[str, str]:
+        """弹出对话框让用户从播放器歌单中选择一个。
+
+        Returns:
+            (playlist_id, playlist_name) — 用户取消时返回 ("", "")。
+        """
+        dialog = QDialog(self)
+        dialog.setWindowTitle("从播放器导入歌单")
+        dialog.setModal(True)
+        layout = QVBoxLayout(dialog)
+
+        layout.addWidget(QLabel("请选择要导入的播放器歌单："))
+
+        list_widget = QListWidget(dialog)
+        list_widget.setMinimumWidth(360)
+        list_widget.setMinimumHeight(280)
+        for pl in candidates:
+            pid = str(pl.get("id", "") or "")
+            name = str(pl.get("name", "") or pid)
+            count = int(pl.get("count", 0) or 0)
+            item = QListWidgetItem(f"{name}  ({count} 首)")
+            item.setData(Qt.UserRole, pid)
+            item.setData(Qt.UserRole + 1, name)
+            list_widget.addItem(item)
+        list_widget.setCurrentRow(0)
+        layout.addWidget(list_widget, 1)
+
+        # 双击直接确认
+        list_widget.itemDoubleClicked.connect(dialog.accept)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return "", ""
+
+        item = list_widget.currentItem()
+        if item is None:
+            return "", ""
+        return str(item.data(Qt.UserRole) or ""), str(item.data(Qt.UserRole + 1) or "")
+
+    def _on_import_playlist_done(
+        self,
+        matched_track_ids: list,
+        external_count: int,
+        playlist_name: str,
+        message: str,
+    ) -> None:
+        """Worker 完成后，在主线程创建 MuseArc 歌单并写入 track_ids。"""
+        logger.info(
+            "[PlayerLink] 播放器歌单导入回调: matched=%d external=%d name=%s",
+            len(matched_track_ids), external_count, playlist_name,
+        )
+        self.label_status.setText(f"已连接 (端口 {self._client.port})")
+
+        if not matched_track_ids:
+            QMessageBox.information(self, "从播放器导入歌单", message or "未匹配到任何曲库歌曲。")
+            return
+
+        # 复用同名 MuseArc 歌单；若不存在则新建
+        target_playlist_id = ""
+        existing = [
+            p for p in self.facade.list_playlists()
+            if str(p.get("name", "")).strip() == playlist_name.strip()
+            and str(p.get("playlist_id", "")) != FAVORITES_PLAYLIST_ID
+        ]
+        if existing:
+            target_playlist_id = str(existing[0].get("playlist_id", "") or "")
+            logger.info("[PlayerLink] 复用已有 MuseArc 歌单: %s", target_playlist_id)
+        else:
+            try:
+                target_playlist_id = self.facade.create_playlist(playlist_name)
+                logger.info("[PlayerLink] 新建 MuseArc 歌单: %s (%s)", playlist_name, target_playlist_id)
+            except Exception as exc:
+                logger.exception("[PlayerLink] 创建歌单失败")
+                QMessageBox.warning(self, "从播放器导入歌单", f"创建歌单失败: {exc}")
+                return
+
+        try:
+            added = self.facade.add_tracks_to_playlist(target_playlist_id, matched_track_ids)
+        except Exception as exc:
+            logger.exception("[PlayerLink] 写入歌单失败")
+            QMessageBox.warning(self, "从播放器导入歌单", f"写入歌单失败: {exc}")
+            return
+
+        summary = (
+            f"已导入歌单「{playlist_name}」：新增 {added} 首到 MuseArc 歌单。"
+            f"\n曲库未命中 {external_count} 首（已跳过）。"
+        )
+        QMessageBox.information(self, "从播放器导入歌单", summary)
         self.library_changed.emit()
 
     # ── 右键菜单 ──────────────────────────────────────────
