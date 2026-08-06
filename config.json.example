@@ -1,0 +1,40 @@
+{
+  "last_library_path": null,
+  "thresholds": {
+    "duplicate_high": 0.5,
+    "duplicate_review": 0.3,
+    "duplicate_instrumental_hint": 0.1,
+    "duplicate_cover_hint": 0.01,
+    "lyrics_match_accept": 0.82,
+    "lyrics_match_review": 0.6,
+    "min_track_duration_sec": 45.0
+  },
+  "lmstudio": {
+    "enabled": false,
+    "endpoint": "http://127.0.0.1:1234/v1/chat/completions",
+    "model": "local-model",
+    "timeout_sec": 20.0
+  },
+  "ui": {
+    "force_save_threshold": 10,
+    "undo_max_actions": 50,
+    "button_scale": 1.3,
+    "prompt_empty_edit_confirm": true,
+    "enable_logs": false,
+    "db_autosave_minutes": 5,
+    "delete_tracks_mode_default": "move_linked_lyrics",
+    "lyrics_cell_action_default": "change_mapping",
+    "player_mode": "external",
+    "external_player_path": "",
+    "fingerprint_workers": 0,
+    "duplicate_compare_workers": 0,
+    "duplicate_compare_parallel_threshold": 48,
+    "lyrics_match_workers": 0,
+    "lyrics_match_parallel_threshold": 96,
+    "general_worker_limit": 0,
+    "fullscan_fp_compare_processes": 0,
+    "realtime_search_enabled": true,
+    "player_link_port": 43121
+  },
+  "fingerprint_profile_version": 3
+}

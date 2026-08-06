@@ -1,7 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 from PySide6.QtCore import QModelIndex, QObject, Qt, QThread, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
@@ -116,7 +116,7 @@ def _errors_count(value) -> int:
 
     参数:
         value: 任意类型，待统计的值。可以是列表、元组、字典，或其他可转换为整数的类型。
-    
+
     返回:
         int: 统计出的错误或问题的数量。若无法统计则返回0。
     """
@@ -273,10 +273,10 @@ class ImportTaskDetailDialog(QDialog):
 
     def _apply_sort(self) -> None:
         """应用排序功能。根据用户在下拉框中的选择，对文件列表模型中的数据进行排序。
-    
+
         Args:
             无显式参数。方法从实例的UI组件（combo_sort）和文件数据模型（file_model）中获取数据。
-    
+
         Returns:
             None。排序结果直接更新到文件数据模型（file_model）中。
         """
@@ -325,16 +325,16 @@ class ImportTaskDetailDialog(QDialog):
                 - status_code (str): 文件状态代码
         """
         out: list[dict] = []  # 初始化空列表用于存储规范化后的结果
-    
+
         # 遍历输入的行列表，如果rows为None则使用空列表避免报错
         for item in rows or []:
             # 跳过非字典类型的元素，确保数据格式正确
             if not isinstance(item, dict):
                 continue
-        
+
             # 获取相对路径，如果不存在或为空则使用空字符串
             rel = str(item.get("relpath", "") or "")
-        
+
             # 构建规范化字典并添加到结果列表
             out.append(
                 {
@@ -397,7 +397,7 @@ class ImportTaskDetailDialog(QDialog):
             )
         )
         # 处理文件状态数据
-        raw_states = payload.get("file_states", None)
+        raw_states = payload.get("file_states")
         # 检查文件状态数据是否为非空列表
         if isinstance(raw_states, list) and raw_states:
             # 规范化并更新文件状态表格
@@ -731,7 +731,7 @@ class ImportManagementPage(QWidget):
     def on_resume_import(self) -> None:
         """
         恢复之前未完成的导入任务。
-    
+
         功能：列出所有未完成的导入记录，允许用户选择其中一个或全部继续导入。
         参数：无（除了self）
         返回值：None
@@ -766,13 +766,13 @@ class ImportManagementPage(QWidget):
 
     def on_import_stats(self) -> None:
         """导入播放列表统计数据。
-    
+
         功能：打开文件对话框让用户选择一个JSON格式的统计数据文件，
               将数据导入到当前播放列表中，并显示导入结果。
-    
+
         参数：
             self: 实例自身。
-    
+
         返回值：
             None
         """
@@ -823,7 +823,7 @@ class ImportManagementPage(QWidget):
             box.setWindowTitle("导入歌单")
             box.setText(f"已存在同名歌单：{existing_name}")
             overwrite_btn = box.addButton("覆盖原来的记录和歌单", QMessageBox.ButtonRole.AcceptRole)  # 添加覆盖按钮
-            rename_btn = box.addButton("自动以(x)重命名再导入", QMessageBox.ButtonRole.ActionRole)  # 添加重命名按钮
+            _rename_btn = box.addButton("自动以(x)重命名再导入", QMessageBox.ButtonRole.ActionRole)  # 添加重命名按钮
             cancel_btn = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)  # 添加取消按钮
             box.exec()  # 显示消息框
             clicked = box.clickedButton()  # 获取点击的按钮
@@ -923,14 +923,14 @@ class ImportManagementPage(QWidget):
 
     def _enqueue_source(self, source_path: str) -> None:
         """将新的源路径加入导入队列，并尝试启动后续导入。
-    
+
         该方法用于管理待导入文件的队列。首先将输入的路径解析为绝对路径，
         然后检查该路径是否与当前正在处理的路径相同或已存在于队列中。
         若不重复，则将其添加到队列末尾，更新队列视图，并尝试启动下一个导入任务。
-    
+
         Args:
             source_path (str): 需要加入队列的源文件路径，可以是相对或绝对路径。
-    
+
         Returns:
             None: 该方法没有返回值。
         """
@@ -948,12 +948,12 @@ class ImportManagementPage(QWidget):
 
     def _start_next_import(self) -> None:
         """启动队列中的下一个导入操作。
-    
+
         检查是否有活动的导入线程或队列为空，如果没有，则从队列中取出源并启动导入，然后刷新队列视图。
-    
+
         参数：
             self: 当前实例。
-    
+
         返回值：
             None
         """
@@ -1113,7 +1113,7 @@ class ImportManagementPage(QWidget):
         # 获取上一次保存的完整进度数据，用于合并
         prev_payload = self._last_progress_payload or {}
         # 从当前数据中获取文件状态列表
-        raw_states = merged_payload.get("file_states", None)
+        raw_states = merged_payload.get("file_states")
         # 判断是否为无效或空的文件状态列表
         if not isinstance(raw_states, list) or not raw_states:
             # 增量模式下空列表表示"无变化"，保留上次的全量数据

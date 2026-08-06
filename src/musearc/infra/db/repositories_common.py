@@ -3,17 +3,12 @@ from __future__ import annotations
 """Repository common helpers and constants."""
 
 import json
-from datetime import datetime, timezone
-
-FAVORITES_PLAYLIST_ID = "pl_favorites"
-FAVORITES_PLAYLIST_NAME = "\u6536\u85cf"
-DEFAULT_TAG_FIELD = "\u5907\u6ce8"
-DEFAULT_TAG_FIELDS = ("\u5907\u6ce8", "\u559c\u7231\u7a0b\u5ea6")
+from datetime import UTC, datetime
 
 
 def _utc_now_iso() -> str:
     """Return current UTC ISO timestamp string."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _placeholders(size: int) -> str:

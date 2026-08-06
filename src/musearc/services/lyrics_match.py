@@ -44,19 +44,19 @@ class LyricsMatcher:
     def _resolve_workers(self) -> int:
         """
         解析并返回合理的工作进程数量。
-    
+
         功能：根据配置和系统环境确定要使用的工作进程数。
         参数：无（除 self 外）
         返回值：int，表示工作进程的数量，确保在 1 到 16 之间。
         """
         # 将配置值转换为整数，如果为空或 False 则默认为 0
         workers = int(self.score_workers or 0)
-    
+
         # 如果配置值无效（小于等于 0），则根据系统 CPU 核心数动态计算默认值
         if workers <= 0:
             # 计算默认值：使用 CPU 核心数减 1，保底 1 个，上限 8 个
             return max(1, min(8, (os.cpu_count() or 4) - 1))
-    
+
         # 如果配置值有效，确保在 1 到 16 的范围内
         return max(1, min(16, workers))
 
@@ -219,10 +219,10 @@ class LyricsMatcher:
     @staticmethod
     def _normalize_name(value: str) -> str:
         """规范化名称字符串：移除括号及其内部内容，并进行文本规范化处理。
-    
+
         参数：
             value (str): 需要规范化的原始字符串。
-        
+
         返回值：
             str: 规范化后的字符串。
         """

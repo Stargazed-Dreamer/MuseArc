@@ -1,9 +1,9 @@
 ﻿from __future__ import annotations
 
-from collections import defaultdict
-from collections.abc import Callable
 import logging
 import re
+from collections import defaultdict
+from collections.abc import Callable
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
@@ -54,10 +54,10 @@ def _safe_bool(value) -> bool:
 
 def format_mmss(value) -> str:
     """将数值转换为“分钟:秒”格式的字符串。
-    
+
     Args:
         value: 需要转换的数值，可以是数字或能转换为数字的字符串。
-        
+
     Returns:
         格式为 "MM:SS" 的字符串，其中 MM 为两位分钟数，SS 为两位秒数。
     """
@@ -307,12 +307,12 @@ class TrackTableModel(QAbstractTableModel):
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         """返回模型中的行数。
-    
+
         本模型仅支持顶级项，不支持树形结构，因此当给定有效的父索引（表示非顶级项）时，直接返回0。
-    
+
         参数:
             parent (QModelIndex, optional): 父项的索引。默认为空的QModelIndex()，表示请求顶级项的行数。
-        
+
         返回值:
             int: 当parent为无效索引（顶级项）时，返回self.display_rows的长度；否则返回0。
         """
@@ -534,7 +534,7 @@ class TrackTableModel(QAbstractTableModel):
 
     def set_tracks(self, rows: list[dict]) -> None:
         """设置曲目数据，处理原始曲目列表并更新内部状态。
-    
+
         该方法遍历输入的行数据，对每个曲目进行数据标准化和格式化处理，包括：
         1. 时长格式转换
         2. 文件名提取和清理
@@ -543,10 +543,10 @@ class TrackTableModel(QAbstractTableModel):
         5. 布尔字段的规范化处理
         6. 格式字段的统一处理
         7. 标签字段的展开和映射
-    
+
         参数：
             rows (list[dict]): 包含原始曲目数据的字典列表，每个字典代表一个曲目。
-    
+
         返回值：
             None: 该方法不返回任何值，但会更新实例的raw_tracks属性并触发界面重建。
         """

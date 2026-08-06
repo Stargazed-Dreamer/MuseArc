@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
@@ -13,8 +13,8 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
-    QHeaderView,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -145,11 +145,11 @@ class _ButtonHotkeyMarker(QObject):
     def eventFilter(self, obj, event) -> bool:
         """
         事件过滤器方法，用于拦截和处理特定对象的事件。
-    
+
         参数：
             obj: 事件发生的目标对象。
             event: 事件对象，包含事件类型等信息。
-    
+
         返回值：
             bool: 表示事件是否被传递给父类的事件过滤器进行处理。
         """
@@ -168,10 +168,10 @@ class _ButtonHotkeyMarker(QObject):
         """重新布局内部标签在按钮中的位置。
 
         调整标签大小，然后将其移动到按钮内水平靠右、垂直靠上的位置，并确保标签在按钮内部且不被遮挡。
-    
+
         Args:
             self: 实例对象自身，包含 button 和 label 属性。
-    
+
         Returns:
             None: 该方法不返回任何值。
         """
@@ -257,28 +257,28 @@ class _InlineClearButtonLayout(QObject):
     def _relayout(self) -> None:
         """
         重新布局当前行编辑控件内部的按钮位置。
-    
+
         此方法用于根据行编辑控件的当前尺寸，动态调整其内部按钮的位置，
         以确保按钮始终位于合适的位置（例如靠近行编辑控件的右侧并垂直居中）。
-    
+
         参数：
             无（除了 self）。
-    
+
         返回值：
             无（None）。
         """
         # 调整按钮大小以适合其内容
         self.button.adjustSize()
-    
+
         # 计算按钮的 x 坐标：确保按钮不超出左边界（最小为2像素），并紧贴行编辑控件右侧（减去按钮宽度和4像素的边距）
         x = max(2, self.line_edit.width() - self.button.width() - 4)
-    
+
         # 计算按钮的 y 坐标：使按钮在行编辑控件内垂直居中
         y = max(0, (self.line_edit.height() - self.button.height()) // 2)
-    
+
         # 将按钮移动到计算出的 (x, y) 位置
         self.button.move(x, y)
-    
+
         # 将按钮提升至顶层，确保其不被其他控件遮挡
         self.button.raise_()
 
@@ -318,7 +318,7 @@ def _install_inline_clear_button(line_edit: QLineEdit, *, on_cleared=None) -> No
     # 如果 line_edit 已经安装过清除按钮，则直接返回，避免重复安装
     if hasattr(line_edit, "_inline_clear_btn"):
         return
-    
+
     # 创建工具按钮，将其设置为 line_edit 的子控件
     button = QToolButton(line_edit)
     # 设置按钮显示的文本为乘号（×）
@@ -362,11 +362,11 @@ def _install_inline_clear_button(line_edit: QLineEdit, *, on_cleared=None) -> No
 
 def _ask_export_format(parent: QWidget, anchor: QWidget) -> tuple[str, bool]:
     """显示导出格式选择菜单，并返回用户选择的格式和操作标志。
-    
+
     参数:
         parent (QWidget): 菜单的父窗口部件，用于菜单的生命周期管理。
         anchor (QWidget): 菜单的锚点部件，菜单将显示在其下方。
-    
+
     返回:
         tuple[str, bool]: 一个元组，包含两个元素：
             - 第一个元素是格式字符串（如"mp3", "flac", "opus", "original", "__plan__"）。
@@ -434,11 +434,11 @@ def _safe_int(value, default: int = 0) -> int:
 
 def _show_track_details(parent: QWidget, track: dict) -> None:
     """在父窗口中弹出一个对话框，显示给定轨道的详细信息。
-    
+
     Args:
         parent (QWidget): 用于指定消息框父窗口的部件。
         track (dict): 包含轨道信息的字典，键包括'track_id', 'file_name', 'title'等。
-    
+
     Returns:
         None: 此函数无返回值，仅用于显示UI消息框。
     """
@@ -1029,25 +1029,25 @@ def _change_track_lyrics_mapping(parent: QWidget, facade: MuseArcFacade, tracks:
     valid_rows = [dict(r) for r in tracks if str((r or {}).get("track_id", "")).strip()]
     if not valid_rows:  # 如果没有有效音轨，直接返回失败
         return False
-    
+
     # 获取第一个音轨的信息，用于对话框的初始搜索词
     first = valid_rows[0]
     query = str(first.get("title", "") or first.get("file_name", "") or "").strip()  # 优先使用标题，其次文件名
-    
+
     # 打开歌词选择对话框，设置初始搜索词并允许清除选项
     dialog = LyricsPickerDialog(parent, facade, initial_query=query, allow_clear=True)
     if dialog.exec() != QDialog.DialogCode.Accepted:  # 用户取消选择则返回失败
         return False
-    
+
     selected_lyrics_id = dialog.selected_lyrics_id  # 获取用户选择的歌词ID
-    
+
     # 遍历所有有效音轨，设置其主歌词为选中的歌词
     for row in valid_rows:
         track_id = str(row.get("track_id", "") or "").strip()
         if not track_id:  # 再次检查音轨ID，防止意外
             continue
         facade.set_primary_lyrics_for_track(track_id, selected_lyrics_id)  # 调用门面方法更新映射
-    
+
     return True  # 全部操作成功完成
 
 
@@ -1284,15 +1284,15 @@ class ExportConfigDialog(QDialog):
 
     def _choose_folder(self) -> None:
         """打开文件对话框让用户选择一个文件夹，并将选择的路径显示在路径输入框中。
-    
+
         功能：
             弹出系统文件对话框，让用户选择一个文件夹路径。
             如果用户选择了一个有效的文件夹路径，则将该路径显示在界面上的路径输入框中。
             如果用户取消选择或未选择任何文件夹，则不进行任何操作。
-    
+
         参数：
             self (QWidget): 当前窗口实例，用于作为对话框的父窗口，并访问路径输入框控件。
-    
+
         返回值：
             None: 此方法不返回任何值，仅通过副作用更新UI控件。
         """
@@ -1301,7 +1301,7 @@ class ExportConfigDialog(QDialog):
         # 参数2：对话框标题
         # 参数3：对话框打开时默认显示的目录路径，若为空则使用当前工作目录
         folder = QFileDialog.getExistingDirectory(self, "选择导出目录", self.path_input.text().strip() or str(Path.cwd()))
-    
+
         # 检查用户是否选择了有效的文件夹路径（非空字符串表示用户做出了选择）
         if folder:
             # 将用户选择的文件夹路径更新到路径输入框中
@@ -1309,7 +1309,7 @@ class ExportConfigDialog(QDialog):
 
     def _apply_mode_visibility(self) -> None:
         """根据当前选中的模式，更新界面元素的可见性。
-    
+
         功能：该方法根据用户选择的"文件模式"或"播放列表模式"，控制相关界面控件的显示与隐藏。
         参数：self - 实例对象本身，用于访问界面控件和状态。
         返回值：无（None）。
@@ -1318,14 +1318,14 @@ class ExportConfigDialog(QDialog):
         files_mode = bool(self.chk_files.isChecked())
         # 获取"播放列表模式"复选框的选中状态，并转换为布尔值
         playlist_mode = bool(self.chk_playlist.isChecked())
-    
+
         # 根据文件模式状态，控制树形视图和导出歌词复选框的可见性
         self.tree.setVisible(files_mode)
         self.chk_export_lyrics.setVisible(files_mode)
-    
+
         # 根据播放列表模式状态，控制播放列表提示标签的可见性
         self.playlist_hint.setVisible(playlist_mode)
-    
+
         # 遍历一组批量操作按钮，统一根据文件模式状态设置其可见性
         for btn in [
             self.btn_all_original,
@@ -1369,13 +1369,13 @@ class ExportConfigDialog(QDialog):
 
     def export_plan(self) -> dict[str, str]:
         """获取当前界面所选择的音轨转换计划。
-    
+
         功能：
             遍历每个音轨对应的格式选择下拉框，根据用户选择，将其中文格式名映射为内部统一的英文格式标识符，并组装成转换计划字典。
-    
+
         参数：
             self: 实例自身，隐式传入。
-    
+
         返回值：
             dict[str, str]: 一个字典，键为音轨ID (track_id)，值为对应的文件格式（如"original", "mp3", "flac"等）。
         """

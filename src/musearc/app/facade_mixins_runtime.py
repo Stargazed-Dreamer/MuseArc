@@ -1,11 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
 import time
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
-from typing import Callable
-
 from pathlib import Path
 
 from musearc.app.action_log import read_action_logs
@@ -14,7 +13,6 @@ from musearc.infra.media.prober import MediaProbe, repair_metadata_text, seems_m
 from musearc.services.importer import _derive_title_artist, _is_unknown_text
 from musearc.services.library_ops import LibraryOpsService
 
-FAVORITES_PLAYLIST_ID = "pl_favorites"
 _RUNTIME_FP_ENGINE = None
 
 
@@ -29,7 +27,9 @@ def _runtime_worker_fp_engine():
     """
     global _RUNTIME_FP_ENGINE  # 声明使用全局变量 _RUNTIME_FP_ENGINE
     if _RUNTIME_FP_ENGINE is None:  # 检查引擎是否已初始化
-        from musearc.infra.media.fingerprint import AcousticFingerprintEngine  # 从指定模块导入 AcousticFingerprintEngine 类
+        from musearc.infra.media.fingerprint import (
+            AcousticFingerprintEngine,  # 从指定模块导入 AcousticFingerprintEngine 类
+        )
 
         _RUNTIME_FP_ENGINE = AcousticFingerprintEngine()  # 创建一个新的 AcousticFingerprintEngine 实例并赋值给全局变量
     return _RUNTIME_FP_ENGINE  # 返回全局引擎实例
@@ -327,7 +327,7 @@ class FacadeRuntimeMixin:
             """
             text = str(payload or "")
             if not text:
-                return tuple()
+                return ()
             n = len(text)
             # 短字符串（<=12字符）直接作为单个token
             if n <= 12:
@@ -1013,14 +1013,14 @@ class FacadeRuntimeMixin:
     def _restore_lyrics_merge_snapshot(self, repo, payload: dict, snapshot_key: str) -> None:
         """
         恢复合并操作的歌词快照数据。
-    
+
         从payload中提取指定快照键对应的歌词快照数据，并恢复歌词行、存储文件、曲目关联和审核状态。
-    
+
         参数:
             repo: 仓库对象，用于数据库连接。
             payload: 包含快照数据的字典。
             snapshot_key: 快照在payload中的键名。
-    
+
         返回值:
             None
         """
@@ -1088,13 +1088,13 @@ class FacadeRuntimeMixin:
         # 提取主歌词和次歌词的文本内容
         primary_text = str(snap.get("primary_text", "") or "")
         secondary_text = str(snap.get("secondary_text", "") or "")
-    
+
         # 如果存在主歌词路径，则创建目录并写入文件
         if primary_rel:
             primary_path = self.ctx.layout.root / primary_rel
             primary_path.parent.mkdir(parents=True, exist_ok=True)
             primary_path.write_text(primary_text, encoding="utf-8")
-    
+
         # 如果存在次歌词路径，则创建目录并写入文件
         if secondary_rel:
             secondary_path = self.ctx.layout.root / secondary_rel

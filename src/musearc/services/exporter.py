@@ -66,7 +66,7 @@ class ExportService:
             list[Path]: 成功导出的音频文件路径列表。
         """
         # 创建一个字典，为所有指定的音轨分配相同的导出格式
-        format_plan = {track_id: fmt for track_id in track_ids}
+        format_plan = dict.fromkeys(track_ids, fmt)
         # 调用通用导出方法，传入统一的格式计划和其他参数
         return self.export_tracks_with_plan(
             repo,
@@ -91,10 +91,10 @@ class ExportService:
     ) -> list[Path]:
         """
         根据指定的格式计划导出音轨文件。
-    
+
         功能：
             从音乐库中导出指定的音轨，并根据给定的格式计划转换为指定格式。如果设置了copy_bound_lyrics，则还会复制关联的歌词文件。
-    
+
         参数：
             repo: LibraryRepository - 音乐库存储库实例，用于获取音轨和歌词数据
             track_ids: list[str] - 需要导出的音轨ID列表
@@ -103,7 +103,7 @@ class ExportService:
             bitrate: str | None - 目标音频比特率，用于格式转换时的参数设置
             sample_rate: int | None - 目标音频采样率，用于格式转换时的参数设置
             copy_bound_lyrics: bool - 是否复制与音轨关联的歌词文件，默认为False
-    
+
         返回值：
             list[Path] - 成功导出的所有文件路径列表，包括音频文件和歌词文件（如果适用）
         """

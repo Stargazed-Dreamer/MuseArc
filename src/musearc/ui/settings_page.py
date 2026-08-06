@@ -30,10 +30,10 @@ class SettingsPage(QWidget):
     def __init__(self, facade: MuseArcFacade):
         """
         初始化设置界面，创建并配置所有UI控件。
-    
+
         参数：
             facade (MuseArcFacade): 应用程序外观门面对象，用于与后端交互。
-    
+
         返回值：
             无
         """
@@ -163,10 +163,10 @@ class SettingsPage(QWidget):
     def apply_button_scale(self, scale: float) -> None:
         """
         此方法用于将给定的缩放比例应用到保存按钮和选择玩家按钮。
-    
+
         参数:
             scale (float): 缩放比例。
-    
+
         返回:
             None: 此方法不返回任何值。
         """

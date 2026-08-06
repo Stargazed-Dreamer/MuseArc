@@ -5,15 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-
 from musearc.app.action_log import append_action_log
-from musearc.core.ids import new_id
-from musearc.services.library import open_or_create_library
 from musearc.app.facade_mixins_import_export import FacadeImportExportMixin
 from musearc.app.facade_mixins_library import FacadeLibraryMixin
 from musearc.app.facade_mixins_runtime import FacadeRuntimeMixin
-
-FAVORITES_PLAYLIST_ID = "pl_favorites"
+from musearc.core.ids import new_id
+from musearc.services.library import open_or_create_library
 
 
 class MuseArcFacade(FacadeImportExportMixin, FacadeLibraryMixin, FacadeRuntimeMixin):

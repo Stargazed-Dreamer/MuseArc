@@ -303,12 +303,12 @@ class InlinePlayerBar(QWidget):
 
     def _on_position_changed(self, value: int) -> None:
         """位置改变时的处理函数。
-    
+
         当播放位置发生变化时自动调用，用于更新界面控件状态。
-    
+
         Args:
             value: 当前播放位置，单位为毫秒
-        
+
         Returns:
             None
         """
@@ -326,7 +326,7 @@ class InlinePlayerBar(QWidget):
 
         Args:
             value (int): 新的播放时长，单位为毫秒。
-    
+
         Returns:
             None: 此方法不返回任何值。
         """

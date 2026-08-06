@@ -3,12 +3,12 @@
 import json
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _safe_int(value, default: int = 0) -> int:
@@ -130,17 +130,17 @@ def resume_state_path(library_root: Path, source_path: Path) -> Path:
 
 def save_resume_state(path: Path, state: ResumeState) -> None:
     """将导入恢复状态保存到指定文件路径。
-    
+
     Args:
         path: 状态保存的目标文件路径
         state: 要保存的恢复状态对象，包含各种导入进度信息
-        
+
     Returns:
         None: 此函数无返回值，直接将状态写入文件
     """
     # 确保保存路径的父目录存在，如果不存在则递归创建
     path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # 将恢复状态对象转换为字典格式，准备进行JSON序列化
     payload = {
         "version": state.version,  # 状态版本号
@@ -162,7 +162,7 @@ def save_resume_state(path: Path, state: ResumeState) -> None:
         "created_storage_relpaths": state.created_storage_relpaths,  # 新创建的存储相对路径
         "soft_deleted_existing_ids": state.soft_deleted_existing_ids,  # 软删除的现有记录ID
     }
-    
+
     # 将字典转换为JSON格式并写入文件
     # ensure_ascii=False允许输出中文等非ASCII字符，separators压缩JSON格式减少文件大小
     path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
@@ -170,7 +170,7 @@ def save_resume_state(path: Path, state: ResumeState) -> None:
 
 def load_resume_state(path: Path) -> ResumeState | None:
     """从指定路径的JSON文件中加载恢复状态，并将其解析为ResumeState对象。
-    
+
     功能：读取JSON文件，解析内容，并构造ResumeState对象。如果文件不存在，返回None。
     参数：path (Path) - JSON文件的路径。
     返回值：ResumeState | None - 解析后的ResumeState对象，如果文件不存在则返回None。

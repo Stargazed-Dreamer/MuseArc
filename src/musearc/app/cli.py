@@ -34,7 +34,7 @@ def import_from_source(
     library: str | None = typer.Option(None, help="音乐库路径，不传则使用上次路径"),
 ) -> None:
     """从指定来源目录导入音乐文件到音乐库。
-    
+
     功能：扫描指定目录中的音乐文件，并将新发现的文件导入到音乐库中，同时处理元数据提取和歌词匹配。
     参数：
         source (str): 必填，要导入音乐的来源目录路径。
@@ -117,7 +117,7 @@ def export_tracks(
     library: str | None = typer.Option(None, help="音乐库路径"),
 ) -> None:
     """导出指定的音轨到指定目录。
-    
+
     功能：
         将音乐库中指定的音轨导出到用户指定的目录，并根据参数进行格式转换和重采样。
     参数：
@@ -195,7 +195,7 @@ def launch_ui(
     library: str | None = typer.Option(None, help="音乐库路径，不传则使用上次路径"),
 ) -> None:
     """启动音乐库管理的用户界面（UI）。
-    
+
     功能：通过命令行参数可选地接收音乐库路径，启动对应的图形或终端界面。
     参数：
         library (str | None): 音乐库的文件路径。如果未提供，则使用上一次使用的路径。
@@ -209,13 +209,13 @@ def launch_ui(
 @config_app.command("show")
 def config_show() -> None:
     """显示当前运行时配置信息。
-    
+
     功能：
         从运行时加载配置并将其以格式化的JSON字符串形式输出到控制台。
-    
+
     参数：
         无参数。
-    
+
     返回值：
         无返回值（None）。
     """
@@ -235,38 +235,38 @@ def config_set(
     undo_max_actions: int | None = typer.Option(None, min=1, max=10000, help="撤回最大保留条数"),
 ) -> None:
     """用于修改运行时配置的命令行函数。
-    
+
     该函数通过命令行选项接收参数，用于更新LM Studio和UI相关的运行时配置。
-    
+
     参数:
         lmstudio_enabled (bool | None): 是否启用LM Studio服务，None表示不修改。
         lmstudio_endpoint (str | None): LM Studio服务的端点地址，None或空字符串表示不修改。
         lmstudio_model (str | None): LM Studio使用的模型名称，None或空字符串表示不修改。
         force_save_threshold (int | None): 多选模式下自动保存的阈值，取值范围1-1000，None表示不修改。
         undo_max_actions (int | None): 撤回操作保留的最大条数，取值范围1-10000，None表示不修改。
-    
+
     返回值:
         None: 该函数不返回任何值，仅执行配置更新和输出确认信息。
     """
     # 加载当前的运行时配置
     cfg = load_runtime_config()
-    
+
     # 如果用户提供了lmstudio_enabled参数，则更新配置中对应的启用状态
     if lmstudio_enabled is not None:
         cfg.lmstudio.enabled = lmstudio_enabled
-    
+
     # 如果用户提供了非空的lmstudio_endpoint参数，则更新配置中对应的端点地址
     if lmstudio_endpoint:
         cfg.lmstudio.endpoint = lmstudio_endpoint
-    
+
     # 如果用户提供了非空的lmstudio_model参数，则更新配置中对应的模型名称
     if lmstudio_model:
         cfg.lmstudio.model = lmstudio_model
-    
+
     # 如果用户提供了force_save_threshold参数，则更新配置中对应的自动保存阈值
     if force_save_threshold is not None:
         cfg.ui.force_save_threshold = force_save_threshold
-    
+
     # 如果用户提供了undo_max_actions参数，则更新配置中对应的撤回保留条数
     if undo_max_actions is not None:
         cfg.ui.undo_max_actions = undo_max_actions

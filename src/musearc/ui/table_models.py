@@ -35,10 +35,10 @@ class DictTableModel(QAbstractTableModel):
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         """获取数据模型的行数。
-    
+
         Args:
             parent (QModelIndex): 父项模型索引，用于指定行所属的父节点。默认为空索引（即顶级）。
-        
+
         Returns:
             int: 模型中的数据行数。
         """
@@ -113,31 +113,31 @@ class DictTableModel(QAbstractTableModel):
     def setData(self, index: QModelIndex, value, role: int = Qt.ItemDataRole.EditRole):
         """
         设置表格模型中的数据。
-    
+
         功能：根据提供的索引、值和角色来更新表格模型中的数据。
               仅当角色为编辑角色且索引有效时，才会处理编辑请求。
               如果列不可编辑或新旧值相同，则拒绝修改。
               成功修改后，会触发数据更改信号，并记录日志。
               特别地，如果子类定义了 field_edited 信号且存在 ID 键，则会异步发射该信号。
-    
+
         参数：
             index (QModelIndex): 要设置数据的单元格索引。
             value: 要设置的新值。
             role (int, 可选): 数据角色，默认为编辑角色 (Qt.ItemDataRole.EditRole)。
-    
+
         返回：
             bool: 如果数据设置成功返回 True，否则返回 False。
         """
         # 如果角色不是编辑角色或索引无效，则直接返回 False
         if role != Qt.ItemDataRole.EditRole or not index.isValid():
             return False
-    
+
         # 获取索引所在的列对象
         col = self.columns[index.column()]
         # 如果该列不可编辑，则返回 False
         if not col.editable:
             return False
-    
+
         # 获取索引所在的行数据（字典）
         row = self.rows[index.row()]
         # 获取列定义中的键名
@@ -146,11 +146,11 @@ class DictTableModel(QAbstractTableModel):
         old_value = str(row.get(key, "") or "")
         # 将新值转换为字符串并去除首尾空白，若 value 为 None 则用空字符串表示
         new_value = str(value).strip() if value is not None else ""
-    
+
         # 如果新值与旧值相同，则无需修改，返回 False
         if new_value == old_value:
             return False
-    
+
         # 将新值写入行数据中对应的键
         row[key] = new_value
         # 发出数据更改信号，通知视图和相关观察者数据已更新
@@ -158,7 +158,7 @@ class DictTableModel(QAbstractTableModel):
         logger.debug("[DictTableModel] 编辑: key=%s old=%r new=%r", key, old_value, new_value)
         # 打印日志到控制台
         print(f"[table_edit] {key}: {old_value!r} -> {new_value!r}")
-    
+
         # 如果子类定义了 field_edited 信号且存在 ID 键，则异步发射信号
         if self._id_key and self.field_edited is not None:
             # 获取行数据中的 ID 值，转换为字符串，若为空或 None 则用空字符串表示
@@ -170,7 +170,7 @@ class DictTableModel(QAbstractTableModel):
                 self.field_edited.emit(row_id, key, new_value)
 
         self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
-    
+
         # 数据设置成功，返回 True
         return True
 

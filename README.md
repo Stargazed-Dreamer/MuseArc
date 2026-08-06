@@ -1,4 +1,4 @@
-﻿# MuseArc
+# MuseArc
 
 MuseArc 是面向超大、混乱歌曲库的清洗与统一管理项目。
 
@@ -23,12 +23,35 @@ MuseArc 是面向超大、混乱歌曲库的清洗与统一管理项目。
 
 ## 目录结构
 
-- `src/musearc/core`：领域模型、枚举、哈希、文本归一化
-- `src/musearc/infra`：SQLite、媒体库封装（PyAV）、LM Studio 适配
-- `src/musearc/services`：导入去重、歌词匹配、导出、检索
-- `src/musearc/app`：CLI 与 Facade（给 UI/其它程序调用）
-- `src/musearc/ui`：UI 首版
-- `docs`：架构与 UI 设计文档
+> 完整、权威的项目结构见 [AGENTS.md](AGENTS.md)。此处仅给出核心脉络。
+
+```
+MuseArc/
+├── src/musearc/                # 源代码
+│   ├── core/                   # 领域基础层（无副作用）：models / enums / exceptions / constants / hashing / ids / paths / pinyin / text_normalize
+│   ├── config/                 # 配置层：models.py（RuntimeConfig, LmStudioConfig, UiConfig）+ store.py
+│   ├── infra/                  # 基础设施层：logging / db（schema+repositories）/ llm / media（PyAV, Chromaprint, mutagen）/ player
+│   ├── services/               # 领域服务层：importer / dedupe / lyrics_match / exporter / library_ops / scanner
+│   ├── app/                    # 应用外观层：cli + facade（唯一外观入口）+ facade_mixins_* + action_log
+│   ├── ui/                     # 界面层（PySide6）：主窗口、页面、审查页、导入、播放器、设置等
+│   └── ui_contracts/           # UI 契约层
+├── tests/                      # 自动化测试（pytest，目前覆盖 core 层纯函数）
+├── realLib/                    # 实际音乐库数据（gitignore）
+├── tools/                      # 外部工具：chromaprint/bin/（Windows DLL）、export_build.py
+├── docs/                       # 项目文档（见 docs/README.md 索引）
+├── .agents/skills/             # Skill 定义文件（_index.md 为索引）
+├── .trae/rules/                # AI 规则（功能变更检查清单）
+├── .github/workflows/          # CI/CD（ruff lint + pytest）
+├── AGENTS.md                   # Agent 入口文档（项目唯一真相源）
+├── pyproject.toml              # 项目配置、依赖、构建、工具链
+├── config.json.example         # 配置文件模板
+├── LICENSE                     # MIT 许可证
+├── CONTRIBUTING.md             # 贡献指南
+├── CHANGELOG.md                # 更新日志
+└── start.bat                   # Windows 快速启动
+```
+
+架构分层：`core → infra → services → app → ui`。UI 层绝不直接操作数据库或调用 infra，必须经 `MuseArcFacade`。详见 [AGENTS.md](AGENTS.md)。
 
 ## 依赖准备
 
@@ -72,6 +95,24 @@ uv run musearc export --track trk_xxx --track trk_yyy --out F:/Exports --fmt mp3
 ```bash
 uv run musearc review --library F:/Music/MyMuseArcLibrary
 ```
+
+查看运行时配置（LM Studio、UI 行为等）：
+
+```bash
+uv run musearc config show
+```
+
+修改运行时配置（仅传入的参数会被更新，其余保持不变）：
+
+```bash
+# 启用 LM Studio 并设置端点与模型
+uv run musearc config set --lmstudio-enabled --lmstudio-endpoint http://127.0.0.1:1234/v1 --lmstudio-model qwen2.5-7b
+
+# 调整 UI 行为
+uv run musearc config set --force-save-threshold 50 --undo-max-actions 200
+```
+
+配置文件位于音乐库根目录的 `config.json`，模板见 [config.json.example](config.json.example)。
 
 启动 UI：
 
@@ -132,3 +173,24 @@ from pypinyin import lazy_pinyin
 ch = "晴"
 initial = lazy_pinyin(ch)[0][0].upper()  # Q
 ```
+
+## 开发与贡献
+
+- 架构约束、目录约定、Skill 系统：见 [AGENTS.md](AGENTS.md)
+- 贡献流程、提交规范、测试与 lint：见 [CONTRIBUTING.md](CONTRIBUTING.md)
+- 变更历史：见 [CHANGELOG.md](CHANGELOG.md)
+
+```bash
+# 安装开发依赖（含 pytest / ruff / mypy）
+uv sync --extra dev
+
+# 运行测试
+uv run pytest tests/ -v
+
+# Lint
+uv run ruff check src/ tests/
+```
+
+## 许可证
+
+[MIT License](LICENSE)

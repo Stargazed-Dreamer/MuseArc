@@ -1,16 +1,62 @@
+# ===== Python =====
 **/__pycache__/
-.venv
-test*
-/*lib*/
-/*tmp*/
-.build/
-*参考
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
 
-# Agent 配置（含密钥）
+# ===== 虚拟环境 =====
+.venv/
+venv/
+env/
+
+# ===== 测试 / 覆盖率 / Lint 缓存 =====
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# ===== IDE / 编辑器 =====
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# ===== MuseArc 运行时数据(用户音乐库,含数据库与归档音频/歌词) =====
+realLib/
+
+# ===== 本地测试音频/测试库(含二进制音频文件,勿入库) =====
+testFile/
+testFile_duplicate/
+testLib/
+
+# ===== MuseArc 配置(可能含个人 endpoint / 偏好,勿入库) =====
+config.json
 config.toml
 
-# 运行时临时文件
-temp/
+# ===== 运行时产物:导出歌单 / 播放统计 =====
+*.muse_playlist.json
+*.muse_stats.json
 
-# 记忆存储
+# ===== 临时工作区(歌词 LLM 审核等一次性产物) =====
+lyrics_llm_review/
+temp/
+tmp/
+
+# ===== 备份与日志 =====
+*.bak
+*.log
+
+# ===== 记忆存储 =====
 memory/
+
+# ===== 构建临时 =====
+.build/
+
+# ===== 本地参考资料目录 =====
+*参考

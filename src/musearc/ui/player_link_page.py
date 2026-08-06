@@ -6,8 +6,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from PySide6.QtCore import QModelIndex, QObject, Qt, QThread, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -27,8 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from musearc.app.facade import MuseArcFacade, FAVORITES_PLAYLIST_ID
-from musearc.infra.player.client import PlayerClient, PlayerClientError
+from musearc.app.facade import FAVORITES_PLAYLIST_ID, MuseArcFacade, PlayerClient, PlayerClientError
 from musearc.ui.table_models import ColumnDef, DictTableModel
 
 logger = logging.getLogger(__name__)
@@ -545,39 +543,39 @@ class PlayerLinkPage(QWidget):
 
     def _on_refresh_done(self, matched: list, external: list, playlist_name: str, playlist_id: str) -> None:
         """刷新完成后的回调函数，用于更新界面显示。
-    
+
         功能：
             当外部数据刷新完成后，此方法被调用，用于更新匹配歌曲列表、外部歌曲列表、
             当前歌单信息以及相关的UI显示。
-    
+
         参数：
             matched (list): 已匹配的歌曲列表，这些歌曲在本地曲库中存在。
             external (list): 未匹配的歌曲列表，这些歌曲不在本地曲库中。
             playlist_name (str): 当前歌单的名称。
             playlist_id (str): 当前歌单的唯一标识符。
-    
+
         返回值：
             None: 此方法不返回任何值，仅用于更新UI状态。
         """
         # 记录日志信息，显示匹配数量、外部数量、歌单名称和歌单ID
         logger.info("[PlayerLink] 同步回调: matched=%d external=%d playlist=%s id=%s",
                     len(matched), len(external), playlist_name, playlist_id)
-    
+
         # 更新状态标签，显示已连接状态及使用的端口
         self.label_status.setText(f"已连接 (端口 {self._client.port})")
-    
+
         # 更新已匹配歌曲模型，传入已匹配的歌曲列表
         self.matched_model.set_rows(matched)
-    
+
         # 更新外部歌曲模型，传入外部歌曲列表
         self.external_model.set_rows(external)
-    
+
         # 更新已匹配歌曲数量标签显示
         self.label_matched.setText(f"曲库歌曲 ({len(matched)})")
-    
+
         # 更新外部歌曲数量标签显示，说明这些歌曲不在曲库中无法操作
         self.label_external.setText(f"外部歌曲 ({len(external)}) — 不在曲库中，无法操作")
-    
+
         # 检查歌单名称是否有效（不为空且不以"错误"开头）
         if playlist_name and not playlist_name.startswith("错误"):
             # 有效歌单名称，显示歌单名称
@@ -585,7 +583,7 @@ class PlayerLinkPage(QWidget):
         else:
             # 无效歌单名称或以"错误"开头，显示默认占位符
             self.label_playlist.setText("歌单: -")
-    
+
         # 更新当前歌单ID为传入的playlist_id
         self._current_playlist_id = playlist_id
 
@@ -638,12 +636,12 @@ class PlayerLinkPage(QWidget):
 
     def _on_play_selected(self) -> None:
         """处理用户选择播放项目的事件。
-    
+
         获取当前选中的匹配行，并在主窗口执行播放队列操作。
-    
+
         Args:
             self: 类实例对象。
-    
+
         Returns:
             None
         """
@@ -658,14 +656,14 @@ class PlayerLinkPage(QWidget):
 
     def _on_delete(self) -> None:
         """处理联动删除歌曲的操作
-    
+
         功能：
             根据用户选择，同步删除MuseArc曲库和播放器中的歌曲，并提供删除模式选择。
             支持多种删除模式（如：仅删除歌曲、同时删除关联歌词等）。
-    
+
         参数：
             无（除了self实例本身）
-    
+
         返回值：
             None
         """
@@ -706,6 +704,7 @@ class PlayerLinkPage(QWidget):
         # 2. 在播放器中删除歌曲
         playlist_id = self._current_playlist_id or "all_songs"  # 获取当前播放列表ID，默认为"all_songs"
         failed_player = []  # 记录在播放器端删除失败的歌曲ID
+        last_error_msg = ""  # 记录最后一次播放器端错误信息
         for ptid in player_track_ids:
             if not ptid:  # 跳过空ID
                 continue
@@ -717,12 +716,12 @@ class PlayerLinkPage(QWidget):
                 # 记录播放器删除失败，但不中断整个删除过程
                 logger.warning("[PlayerLink] 播放器删除失败: %s", exc)
                 failed_player.append(ptid)
+                last_error_msg = str(exc)
 
         # 构建操作结果消息
         msg = f"已从曲库删除 {count} 首歌曲。"
         if failed_player:
-            # 注意：这里使用了循环中最后的exc变量，如果循环中发生多次异常，只能显示最后一次异常信息
-            msg += f"\n{len(failed_player)} 首在播放器端删除失败: {exc}"
+            msg += f"\n{len(failed_player)} 首在播放器端删除失败，最后错误: {last_error_msg}"
         # 显示最终操作结果
         QMessageBox.information(self, "联动删除", msg)
         # 发射信号通知其他部件曲库已更改
@@ -737,10 +736,10 @@ class PlayerLinkPage(QWidget):
 
         该方法在用户触发导入收藏夹操作时被调用，主要用于将云端的“红心”标记歌曲同步到本地数据库。
         执行流程包括检查连接状态、更新界面提示、获取现有歌曲列表，然后启动后台工作线程来实际处理导入任务。
-    
+
         Args:
             self: 实例对象本身，用于访问实例属性和方法。
-    
+
         Returns:
             None: 该方法不返回任何值，结果通过回调方法处理。
         """
@@ -762,13 +761,13 @@ class PlayerLinkPage(QWidget):
 
     def _on_import_fav_done(self, matched: list, message: str) -> None:
         """导入红心歌曲完成的回调函数。
-    
+
         根据导入匹配的结果，将匹配到的歌曲添加到收藏歌单，并显示相应的提示信息。
-    
+
         Args:
             matched: 匹配到的歌曲信息列表，每个元素是一个包含歌曲信息的字典。
             message: 导入过程的状态或结果消息。
-    
+
         Returns:
             None: 此方法无返回值。
         """
@@ -1052,10 +1051,10 @@ class PlayerLinkPage(QWidget):
     def _play_in_player(self, rows: list[dict]) -> None:
         """
         遍历文件信息列表，尝试在媒体播放器中播放第一个存在的文件。
-    
+
         参数:
             rows (list[dict]): 包含文件信息的字典列表，每个字典应包含'storage_relpath'键。
-    
+
         返回:
             None: 该方法不返回任何值。
         """
@@ -1127,13 +1126,13 @@ class PlayerLinkPage(QWidget):
 
     def _cleanup_worker(self) -> None:
         """清理工作线程资源。
-    
+
         该方法负责安全地销毁并清理与工作线程相关的对象（self._worker 和 self._thread），
         防止内存泄漏。清理后，相关属性将被设置为 None。
-    
+
         参数:
             无（除 self）。
-        
+
         返回:
             无返回值 (None)。
         """

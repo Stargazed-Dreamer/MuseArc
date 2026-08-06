@@ -1,4 +1,4 @@
-﻿"""MusePlayer TCP JSON Lines 控制客户端。"""
+"""MusePlayer TCP JSON Lines 控制客户端。"""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import json
 import socket
 from typing import Any
 
+from musearc.core.exceptions import PlayerError
 
-class PlayerClientError(Exception):
+
+class PlayerClientError(PlayerError):
     """播放器通信错误。"""
 
 

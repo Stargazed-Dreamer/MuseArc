@@ -3,15 +3,27 @@
 import logging
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QHBoxLayout, QInputDialog, QLineEdit, QMenu, QMessageBox, QPushButton, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
 from PySide6.QtGui import QAction
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QInputDialog,
+    QLineEdit,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from musearc.app.facade import FAVORITES_PLAYLIST_ID, MuseArcFacade
-from musearc.ui.track_grid import TrackGridWidget, _copy_selected_cells
+from musearc.ui.long_task import make_chunked_task, run_modal_task
 from musearc.ui.main_window_helpers import (
-    _clear_line_edit_with_undo,
     _apply_button_scale,
     _choose_or_create_playlist,
+    _clear_line_edit_with_undo,
     _handle_track_lyrics_cell_action,
     _install_inline_clear_button,
     _install_row_function_shortcuts,
@@ -23,7 +35,7 @@ from musearc.ui.main_window_helpers import (
     _storage_path_for_track_row,
 )
 from musearc.ui.main_window_pages_common import _queue_play_tracks, _release_player_for_file_ops
-from musearc.ui.long_task import make_chunked_task, run_modal_task
+from musearc.ui.track_grid import TrackGridWidget, _copy_selected_cells
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +56,7 @@ def _run_chunked_ids_modal(
     chunk_size: int = 512,
 ) -> tuple[dict, bool]:
     """运行一个分块处理ID列表的任务，并通过模态对话框展示进度和状态。
-    
+
     Args:
         parent: 对话框的父窗口部件。
         title: 对话框的标题。
@@ -218,14 +230,14 @@ class TracksPage(QWidget):
 
     def apply_search_filter(self) -> None:
         """执行搜索过滤，根据输入框内容筛选显示的项目行。
-    
+
         功能：获取搜索框的文本，过滤 `self.all_rows` 中匹配的行，并更新网格显示内容。
         参数：无额外参数，使用实例属性 self.search_input 和 self.all_rows。
         返回值：无 (None)。
         """
         # 获取搜索文本，去除首尾空白并转换为小写，以便进行不区分大小写的比较
         query = self.search_input.text().strip().casefold()
-    
+
         # 如果查询字符串为空，则显示所有行
         if not query:
             rows = list(self.all_rows)
@@ -248,7 +260,7 @@ class TracksPage(QWidget):
                 # 如果查询字符串出现在该行的拼接文本中，则保留该行
                 if query in text:
                     rows.append(row)
-    
+
         # 更新网格控件显示筛选后的行数据
         self.grid.set_tracks(rows)
         # 在状态栏显示当前加载的行数和总源数据行数
@@ -310,26 +322,26 @@ class TracksPage(QWidget):
     def _delete_track_ids(self, track_ids: list[str]) -> None:
         """
         根据给定的音轨ID列表，将对应的音轨移动到回收站。
-    
+
         该方法处理删除音轨的完整流程，包括：验证输入、释放播放器资源、
         确认删除模式、分块执行删除操作、更新界面状态和触发状态变化信号。
-    
+
         参数:
             track_ids (list[str]): 需要删除的音轨ID列表。
-        
+
         返回值:
             None: 该方法不返回任何值，但会修改实例状态并更新界面。
         """
         if not track_ids:
             return  # 如果传入的音轨ID列表为空，则直接返回，不执行任何操作。
-    
+
         _release_player_for_file_ops(self)  # 释放播放器资源，以便进行文件操作。
-    
+
         # 确定删除模式，如果有多个音轨或默认模式已保存，则可能显示对话框让用户选择。
         mode = _resolve_delete_mode_and_maybe_save_default(self, self.facade, len(track_ids), track_ids)
         if mode == "cancel":
             return  # 如果用户选择取消操作，则直接返回。
-    
+
         try:
             # 以模态对话框的形式分块执行删除操作，每块最多处理256个音轨。
             result, cancelled = _run_chunked_ids_modal(
@@ -344,22 +356,22 @@ class TracksPage(QWidget):
             # 如果删除过程中发生异常，显示警告信息并返回。
             QMessageBox.warning(self, "操作失败", f"移到回收站失败\n{exc}")
             return
-    
+
         # 获取实际受影响的音轨数量，处理可能为None或0的情况。
         count = int(result.get("affected", 0) or 0)
-    
+
         # 将已删除的音轨ID转换为集合，以便快速查找。
         removed = set(track_ids)
-    
+
         # 更新本地音轨列表，移除所有已删除的音轨。
         # 通过比较音轨ID（转换为字符串）来过滤掉已删除的行。
         self.all_rows = [row for row in self.all_rows if str(row.get("track_id", "")) not in removed]
-    
+
         self.apply_search_filter()  # 重新应用搜索过滤器，更新界面显示。
-    
+
         # 更新状态栏信息，显示已删除的数量，并指示是否操作被部分取消。
         self.grid.set_status(f"已移到回收站 {count} 条" + ("（已取消）" if cancelled else ""))
-    
+
         self.library_changed.emit()  # 发出库状态变化信号，通知其他部分进行更新。
 
     def on_delete(self) -> None:
@@ -802,14 +814,14 @@ class PlaylistPage(QWidget):
 
     def set_facade(self, facade: MuseArcFacade) -> None:
         """设置外观对象并更新相关状态。
-    
+
         该方法将传入的外观对象设置给当前实例及其内部网格组件，
         并随后触发播放列表的重新加载以应用新的外观样式。
-    
+
         Args:
             self: 类实例。
             facade (MuseArcFacade): 需要设置的新外观对象。
-    
+
         Returns:
             None
         """
@@ -823,15 +835,15 @@ class PlaylistPage(QWidget):
 
     def reload_playlists(self) -> None:
         """重新加载所有播放列表到树形控件中。
-    
+
         功能：
         1. 从后端获取所有播放列表数据
         2. 清空当前树形控件并重新填充播放列表项
         3. 保持或重置当前选中的播放列表状态
-    
+
         参数：
             无（方法通过self访问实例状态）
-    
+
         返回值：
             无返回值（方法执行完成后树形控件状态已更新）
         """
@@ -1119,38 +1131,38 @@ class PlaylistPage(QWidget):
 
     def on_export(self) -> None:
         """处理导出操作的方法。
-    
+
         功能：
             1. 获取用户选中的音轨列表
             2. 验证选中音轨的有效性
             3. 打开导出对话框让用户选择导出参数
             4. 执行导出并在成功后更新状态栏显示
-    
+
         参数：
             self: 对象实例，用于访问类属性和方法
-    
+
         返回值：
             None (无返回值)
         """
         # 从网格组件获取当前选中的所有音轨
         tracks = self.grid.selected_tracks()
-    
+
         # 从选中音轨中提取有效的音轨ID，转换为字符串格式
         # 使用列表推导式，过滤掉没有track_id的条目
         track_ids = [str(t.get("track_id", "")) for t in tracks if t.get("track_id")]
-    
+
         # 检查是否有有效的音轨ID被选中，如果没有则直接返回
         if not track_ids:
             return
-    
+
         # 打开导出对话框，获取用户确认和导出目标路径
         # _run_export_dialog函数返回一个元组：(用户是否确认, 目标路径)
         ok, target = _run_export_dialog(self, self.facade, tracks, playlist_name=self._current_playlist_name())
-    
+
         # 如果用户取消了对话框或对话框执行失败，则直接返回
         if not ok:
             return
-    
+
         # 更新网格组件的状态栏，显示导出成功的音轨数量和目标路径
         self.grid.set_status(f"已导出 {len(track_ids)} 条到 {target}")
 

@@ -58,7 +58,7 @@ def _looks_mojibake(text: str) -> bool:
 
 def _text_score(text: str) -> int:
     """计算文本的质量评分。
-    
+
     功能：评估输入文本的质量，根据字符类型和乱码情况给出数值评分。
     参数：text (str) - 需要评估的文本字符串。
     返回值：int - 文本的评分，分数越高表示质量越好。
@@ -207,13 +207,13 @@ def _pick_tag(tags: dict[str, str], *keys: str) -> str | None:
 class MediaProbe:
     def probe(self, path: Path) -> ProbeInfo:
         """探测音频文件的基本信息并返回结构化的探测结果。
-    
+
         该方法使用AV库打开音频文件，提取音频流、元数据、时长等信息，
         并尝试读取封面图片数据，最终将所有信息打包成ProbeInfo对象返回。
-    
+
         参数:
             path (Path): 音频文件路径
-        
+
         返回:
             ProbeInfo: 包含音频文件探测结果的对象，包括编码格式、时长、采样率、
                       声道数、比特率、标题、艺术家、专辑、格式名称、封面尺寸、

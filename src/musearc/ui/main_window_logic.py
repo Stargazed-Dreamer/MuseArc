@@ -12,8 +12,16 @@
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QColor, QCloseEvent, QKeyEvent, QKeySequence
-from PySide6.QtWidgets import QAbstractSpinBox, QFileDialog, QLineEdit, QListWidgetItem, QMessageBox, QPlainTextEdit, QTextEdit
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QKeyEvent, QKeySequence
+from PySide6.QtWidgets import (
+    QAbstractSpinBox,
+    QFileDialog,
+    QLineEdit,
+    QListWidgetItem,
+    QMessageBox,
+    QPlainTextEdit,
+    QTextEdit,
+)
 
 from musearc.app.facade import MuseArcFacade
 from musearc.ui.id3_update_window import Id3MetadataUpdateWindow
@@ -23,11 +31,11 @@ from musearc.ui.main_window_components import _apply_button_scale, _history_acti
 
 def _safe_int(value, default: int = 0) -> int:
     """安全地将输入值转换为整数。如果输入是集合类型（如列表、元组、集合或字典）或转换失败，则返回默认值。
-    
+
     参数：
     value -- 需要转换为整数的输入值（可以是任意类型）
     default -- 转换失败时的默认整数值，默认为 0
-    
+
     返回值：
     整数 -- 转换成功后的整数，或转换失败时的默认值
     """
@@ -181,7 +189,7 @@ class MainWindowLogicMixin:
         """
         # 调用外观层对象的save_now方法来执行实际的保存操作
         self.facade.save_now()
-    
+
         # 在状态栏中显示保存成功的提示消息，持续时间为1800毫秒（1.8秒）
         self.statusBar().showMessage("已保存更改", 1800)
 
@@ -349,34 +357,34 @@ class MainWindowLogicMixin:
 
     def _ensure_page_dirty_state(self) -> None:
         """确保页面脏状态字典存在并正确初始化。
-    
+
         该方法检查实例是否已存在有效的页面脏状态字典（_page_dirty属性），
         若不存在或不是字典类型，则根据栈的元素数量重新初始化。
-    
+
         Args:
             self: 类实例本身
-    
+
         Returns:
             None: 该方法不返回任何值，仅设置或验证实例状态
         """
         # 检查是否已存在有效的页面脏状态字典
         if hasattr(self, "_page_dirty") and isinstance(self._page_dirty, dict):
             return  # 已存在则直接返回，无需重新初始化
-    
+
         # 获取栈的元素数量，若栈不存在则默认为0
         count = self.stack.count() if hasattr(self, "stack") else 0
-    
+
         # 重新初始化页面脏状态字典：为每个索引创建False值
-        self._page_dirty = {idx: False for idx in range(count)}
+        self._page_dirty = dict.fromkeys(range(count), False)
 
     def _reload_page_by_index(self, index: int, *, force: bool = False) -> None:
         """
         根据索引重新加载指定页面的内容。
-    
+
         参数:
             index (int): 要重新加载的页面索引，从0开始计数。
             force (bool): 是否强制重新加载，即使页面未被修改过。默认为False。
-    
+
         返回值:
             None: 该方法不返回任何值。
         """
@@ -541,15 +549,15 @@ class MainWindowLogicMixin:
 
     def _on_page_changed(self, index: int) -> None:
         """当页面索引发生变化时调用的方法。
-    
+
         功能：
             1. 确保当前页面的脏状态被记录
             2. 根据新的页面索引重新加载页面
             3. 刷新操作历史记录（不选择当前页面）
-    
+
         参数：
             index (int): 变化后的页面索引
-        
+
         返回值：
             None: 该方法不返回任何值
         """
@@ -562,15 +570,15 @@ class MainWindowLogicMixin:
 
     def _open_library(self) -> None:
         """打开音乐库文件夹，初始化facade，并更新所有页面和配置。
-    
+
         功能：
             弹出文件夹选择对话框让用户选择音乐库路径。
             如果选择了有效路径，创建MuseArcFacade对象。
             将facade设置到所有页面，并执行其他初始化操作。
-    
+
         参数：
             无。
-    
+
         返回值：
             无。
         """
@@ -599,13 +607,13 @@ class MainWindowLogicMixin:
     def closeEvent(self, event: QCloseEvent) -> None:
         """
         窗口关闭事件处理函数。
-    
+
         当主窗口关闭时，确保所有后台任务被安全终止，并执行清理操作。
-    
+
         参数:
             self: 类实例
             event (QCloseEvent): 窗口关闭事件对象，可用于控制关闭流程
-    
+
         返回值:
             None
         """
@@ -613,14 +621,14 @@ class MainWindowLogicMixin:
         if hasattr(self, "page_imports") and self.page_imports.has_running_import():
             # 在状态栏显示提示信息
             self.statusBar().showMessage("正在停止导入任务，请稍候…", 3000)
-        
+
             # 尝试在指定时间内终止运行中的导入任务
             if not self.page_imports.shutdown_running_import(timeout_ms=20000):
                 # 如果终止失败，显示警告并阻止窗口关闭
                 QMessageBox.warning(self, "仍在处理", "导入线程仍在运行，请稍后再退出。")
                 event.ignore()  # 忽略关闭事件，保持窗口打开
                 return
-    
+
         # 检查是否存在播放器栏且播放器栏实例有效
         if hasattr(self, "player_bar") and self.player_bar is not None:
             try:
@@ -629,7 +637,7 @@ class MainWindowLogicMixin:
             except Exception:
                 # 忽略任何可能的异常，避免影响窗口关闭流程
                 pass
-    
+
         # 调用父类的closeEvent方法，完成标准的关闭处理
         super().closeEvent(event)
 

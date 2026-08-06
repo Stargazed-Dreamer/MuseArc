@@ -1,26 +1,49 @@
 ﻿from __future__ import annotations
 
 import logging
-
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QModelIndex, Qt, QTimer, Signal
 from PySide6.QtGui import QKeyEvent
-from PySide6.QtWidgets import QApplication, QAbstractItemView, QCheckBox, QComboBox, QDialog, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QHBoxLayout,
+    QHeaderView,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+)
 
 from musearc.app.facade import MuseArcFacade
-from musearc.ui.table_models import ColumnDef
-from musearc.ui.selection import SelectionController, SelectionMode
-from musearc.ui.track_grid import LyricsTableModel, TrackTableView, _copy_selected_cells, _install_copy_support, _safe_int
+from musearc.ui.long_task import run_modal_task
 from musearc.ui.main_window_helpers import (
     TrackPickerDialog,
-    _clear_line_edit_with_undo,
     _apply_button_scale,
+    _clear_line_edit_with_undo,
     _install_inline_clear_button,
     _install_row_function_shortcuts,
     _reveal_in_file_manager,
 )
-from musearc.ui.long_task import run_modal_task
+from musearc.ui.selection import SelectionController, SelectionMode
+from musearc.ui.table_models import ColumnDef
+from musearc.ui.track_grid import (
+    LyricsTableModel,
+    TrackTableView,
+    _copy_selected_cells,
+    _install_copy_support,
+    _safe_int,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +60,14 @@ class LyricsManagementPage(QWidget):
     def __init__(self, facade: MuseArcFacade):
         """
         初始化歌词管理界面的主窗口。
-    
+
         功能：
             设置整个UI布局，包括搜索、筛选、分组、多选、编辑等控件，
             并建立所有信号与槽的连接，初始化歌词数据模型和表格视图。
-    
+
         参数：
             facade (MuseArcFacade): 门面对象，提供对外部服务的统一访问接口。
-    
+
         返回值：
             None
         """
@@ -62,13 +85,13 @@ class LyricsManagementPage(QWidget):
         self.btn_search = QPushButton("搜索")
         row_top.addWidget(self.search_input, 1)  # 输入框占据大部分空间
         row_top.addWidget(self.btn_search)
-    
+
         # 搜索防抖定时器，避免频繁触发筛选
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)  # 单次触发模式
         self._search_timer.setInterval(120)  # 120毫秒延迟
         self._search_timer.timeout.connect(self.apply_filter)
-    
+
         # 为搜索输入框安装清除按钮
         _install_inline_clear_button(self.search_input, on_cleared=self.apply_filter)
 
@@ -135,7 +158,7 @@ class LyricsManagementPage(QWidget):
                 ColumnDef("lyrics_id", "歌词ID"),
             ]
         )
-    
+
         # 创建并配置表格视图
         self.selection = SelectionController()
         self._selected_lyrics_ids_memory: set[str] = set()
@@ -193,11 +216,11 @@ class LyricsManagementPage(QWidget):
         self.table.customContextMenuRequested.connect(self._show_context_menu)  # 右键菜单请求
         self.table.installEventFilter(self)  # 为表格安装事件过滤器
         self.model.lyrics_field_edited.connect(self._on_lyrics_field_edited)  # 模型数据编辑信号
-    
+
         # 连接选择变化信号以刷新预览，需先检查选择模型是否存在
         if self.table.selectionModel() is not None:
             self.table.selectionModel().selectionChanged.connect(self._on_table_selection_changed)
-    
+
         # 为操作按钮安装行功能快捷键（F3开始）
         _install_row_function_shortcuts(
             self,
@@ -218,13 +241,13 @@ class LyricsManagementPage(QWidget):
     def apply_button_scale(self, scale: float) -> None:
         """
         应用按钮缩放比例。
-    
+
         此方法对实例中的多个按钮对象依次应用给定的缩放系数。
-    
+
         参数:
             self (object): 类的实例。
             scale (float): 要应用的缩放比例，通常为一个浮点数。
-    
+
         返回:
             None: 此方法无返回值。
         """
@@ -289,13 +312,13 @@ class LyricsManagementPage(QWidget):
     def clear_search_with_undo(self) -> None:
         """
         清除搜索输入框的内容，并支持撤销操作。
-    
+
         该方法会清空搜索框中的文本。如果启用了实时搜索模式，清除后将启动一个计时器，
         以便在短暂延迟后自动应用搜索过滤；否则将立即应用过滤。
-    
+
         参数:
             无（除了self，它指向当前实例）
-    
+
         返回值:
             None
         """
@@ -419,7 +442,7 @@ class LyricsManagementPage(QWidget):
         token = self.search_input.text().strip().casefold()
         # 获取分组下拉框当前选中的值，未选择时默认为 "none"
         group_key = str(self.combo_group.currentData() or "none")
-    
+
         if not token:
             # 搜索框为空时，显示所有行数据
             rows = list(self._all_rows)

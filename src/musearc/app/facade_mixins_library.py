@@ -1,11 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-
 
 from musearc.core.hashing import sha1_text
 from musearc.infra.media.tag_writer import write_basic_metadata_tags
@@ -14,13 +13,13 @@ from musearc.services.library_ops import LibraryOpsService
 
 logger = logging.getLogger(__name__)
 
-FAVORITES_PLAYLIST_ID = "pl_favorites"
+from musearc.core.constants import FAVORITES_PLAYLIST_ID
 
 _TIMESTAMP_RE = re.compile(r"\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]")
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _merge_lyrics_text(primary_text: str, secondary_text: str) -> str:
@@ -92,7 +91,7 @@ def _merge_lyrics_text(primary_text: str, secondary_text: str) -> str:
     # 生成最终的合并歌词行列表
     merged_lines: list[str] = []
     # 按时间顺序（相同时间按顺序号）排序
-    for centisec, payload in sorted(merged_timed.items(), key=lambda item: (item[0], item[1][0])):
+    for _centisec, payload in sorted(merged_timed.items(), key=lambda item: (item[0], item[1][0])):
         _order, tag, content = payload
         merged_lines.append(f"{tag}{content}".rstrip())  # 组合时间标签和歌词内容
 
@@ -396,7 +395,7 @@ class FacadeLibraryMixin:
             if count > 0:
                 id3_keys = {"title", "artist", "album"}
                 id3_failures: list[str] = []
-                if any(str(k) in id3_keys for k in fields.keys()):
+                if any(str(k) in id3_keys for k in fields):
                     for row in before:
                         track_id = str(row.get("track_id", "") or "").strip()
                         rel = str(row.get("storage_relpath", "") or "").strip()

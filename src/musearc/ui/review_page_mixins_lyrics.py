@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """审查页面-歌词审查区 Mixin。
 
@@ -11,7 +11,20 @@ from collections import defaultdict, deque
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
 
 def _safe_float(value, default: float = 0.0) -> float:
     """将输入值安全地转换为浮点数。
@@ -79,13 +92,13 @@ def _canonical_lyrics_name(file_name: str) -> str:
 
 def _lyrics_file_bracket_count(file_name: str) -> int:
     """统计文件名（去后缀）中括号对的数量。
-    
+
     此函数用于分析给定的文件名，提取其不包含后缀的文件主名部分，
     并利用正则表达式查找其中所有匹配的、由多种括号符号构成的子串。
-    
+
     参数：
         file_name (str): 需要分析的文件名，可以包含后缀。
-        
+
     返回值：
         int: 文件主名中找到的匹配括号对的数量。
     """
@@ -418,7 +431,7 @@ class ReviewPageLyricsMixin:
         if not rows or not row_controls:
             return
         effective: list[tuple[dict, dict]] = []
-        for row, row_ctrl in zip(rows, row_controls):
+        for row, row_ctrl in zip(rows, row_controls, strict=False):
             checkbox = row_ctrl.get("checkbox")
             if isinstance(checkbox, QCheckBox) and checkbox.isEnabled():
                 checkbox.setChecked(False)
@@ -487,7 +500,7 @@ class ReviewPageLyricsMixin:
         self.preview_right.setPlainText(self._read_lyrics_text(rows[-1]))
     def _lyrics_title_hint(self, row: dict) -> str:
         """从字典行中提取歌词标题提示。
-    
+
         功能：尝试从输入字典中获取歌词标题，若无则从预览内容或源文件名中提取。
         参数：row - 包含歌词信息的字典，可能为None或空字典。
         返回值：提取到的歌词标题字符串。
@@ -497,7 +510,7 @@ class ReviewPageLyricsMixin:
         # 如果成功获取到非空标题，直接返回
         if title:
             return title
-    
+
         # 如果没有标题，尝试从preview字段获取内容
         preview = str((row or {}).get("preview", "") or "")
         # 遍历预览内容的前30行，寻找类似[ti:xxx]格式的标题标记
@@ -508,7 +521,7 @@ class ReviewPageLyricsMixin:
             if low.startswith("[ti:") and s.endswith("]"):
                 # 截取[ti:和]之间的内容并去除两端空格
                 return s[4:-1].strip()
-    
+
         # 如果以上方法都未找到标题，则使用lyrics_source字段的文件名部分
         source = str((row or {}).get("lyrics_source", "") or "")
         # Path(source).stem 获取文件名（不含扩展名）

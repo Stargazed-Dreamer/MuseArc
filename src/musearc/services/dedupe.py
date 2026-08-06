@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import difflib
 import os
@@ -44,25 +44,25 @@ class DuplicateEvaluator:
     def _resolve_workers(self) -> int:
         """
         确定并返回最终的工作进程数量。
-    
+
         根据实例属性 `compare_workers` 和可用的 CPU 核心数，计算一个合理的 worker 进程数。
         如果 `compare_workers` 无效或为零，则基于 CPU 核心数进行智能估算。
-    
+
         参数：
             self (Self): 类实例。
-    
+
         返回：
             int: 计算得到的 worker 进程数，范围在 1 到 16 之间。
         """
         # 尝试将实例属性转换为整数，如果其为 None 或 Falsy，则使用 0 作为默认值
         value = int(self.compare_workers or 0)
-    
+
         # 如果传入的值无效（小于等于0），则进行自动计算
         if value <= 0:
             # 使用 CPU 核心数减 1 作为基准（保留一个核心给主进程），并用 max(1, ...) 和 min(8, ...) 将结果限制在 1 到 8 之间
             # os.cpu_count() 可能返回 None，使用 (or 4) 作为备用值
             return max(1, min(8, (os.cpu_count() or 4) - 1))
-    
+
         # 如果传入的值有效，则直接使用它，但通过 max(1, ...) 和 min(16, ...) 限制其范围在 1 到 16 之间
         return max(1, min(16, value))
 
@@ -79,9 +79,9 @@ class DuplicateEvaluator:
         candidates: list[dict],
     ) -> DuplicateDecisionResult:
         """判断新音频是否与候选列表中的某个音频重复，并返回决策结果。
-    
+
         根据指纹相似度、元数据（标题、艺术家、时长、格式）等多维度信息，决定是保留新音频、保留已有音频，还是标记为需要人工审核。
-    
+
         参数:
             new_payload (str): 新音频的指纹数据
             new_quality (float): 新音频的质量评分
@@ -91,11 +91,11 @@ class DuplicateEvaluator:
             new_source_ext (str | None): 新音频的文件扩展名，默认为None
             new_hash32 (int | None): 新音频的32位哈希值，用于快速筛选，默认为None
             candidates (list[dict]): 候选音频列表，每个元素为包含音频信息的字典
-    
+
         返回值:
             DuplicateDecisionResult: 包含决策类型、相似度分数、已有音频ID和决策原因的对象
         """
-    
+
         def _norm_threshold(value: float | int | None, fallback: float) -> float:
             """标准化阈值，确保值在0.0到1.0之间，无效时返回回退值。"""
             try:
@@ -135,7 +135,7 @@ class DuplicateEvaluator:
             new_title_text: str,
         ) -> bool:
             """判断两个艺术家名称是否兼容（可能相同或属于同一人）。
-        
+
             采用多种策略判断：直接匹配、未知艺术家视为兼容、标题与艺术家字段疑似污染时放宽要求、相似度计算等。
             """
             cand_norm = normalize_text(cand_artist)
@@ -222,7 +222,7 @@ class DuplicateEvaluator:
                     lambda row: self.fp_engine.similarity(new_payload, row["fingerprint_payload"]),
                     filtered_candidates,
                 )
-                for candidate, score in zip(filtered_candidates, scores):
+                for candidate, score in zip(filtered_candidates, scores, strict=False):
                     if score > best_score:
                         best_score = score
                         best_candidate = candidate
@@ -309,7 +309,7 @@ class DuplicateEvaluator:
             existing_format = best_candidate.get("storage_format") or best_candidate.get("source_ext")
             existing_rank = _format_rank(existing_format)
             new_rank = _format_rank(new_source_ext)
-        
+
             # 决策规则：新音频质量显著更高则替换
             if new_quality > existing_quality + 0.08:
                 return DuplicateDecisionResult(

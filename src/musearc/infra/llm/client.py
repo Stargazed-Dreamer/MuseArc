@@ -21,12 +21,12 @@ class LmStudioMatcher:
     def score_audio_lyrics(self, audio_payload: dict, lyrics_payload: dict) -> LlmMatchResult | None:
         """
         使用LLM评估音频与歌词的匹配程度并返回评分结果。
-    
+
         参数:
             self: 类实例
             audio_payload (dict): 包含音频相关元数据的字典，用于构建评估提示
             lyrics_payload (dict): 包含歌词相关元数据的字典，用于构建评估提示
-    
+
         返回值:
             LlmMatchResult | None: 返回包含评分和原因的匹配结果对象，如果功能未启用或发生错误则返回None
         """

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """主窗口装配层。
 
@@ -13,11 +13,11 @@ from pathlib import Path
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QMessageBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -194,7 +194,7 @@ class MainWindow(MainWindowLogicMixin, QMainWindow):
         paths: list[str] = []  # 存储可播放文件的路径列表
         labels: list[str] = []  # 存储每个轨道的显示标签
         start_index = 0  # 初始化起始播放索引
-        for idx, row in enumerate(rows):  # 遍历每一行
+        for _idx, row in enumerate(rows):  # 遍历每一行
             path = self._resolve_track_play_path(row if isinstance(row, dict) else {})  # 解析轨道的播放路径
             if not path:  # 如果路径无效，跳过此行
                 continue

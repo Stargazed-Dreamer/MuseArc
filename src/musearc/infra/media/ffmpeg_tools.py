@@ -1,9 +1,9 @@
 ﻿from __future__ import annotations
 
 import os
+import shutil
 from functools import lru_cache
 from pathlib import Path
-import shutil
 
 from .commands import MediaCommandError
 
@@ -51,14 +51,14 @@ def _common_windows_candidates(binary_name: str) -> list[Path]:
 def _repo_local_candidates(binary_name: str) -> list[Path]:
     """
     查找当前文件所在目录及其所有父目录下，包含指定可执行文件的候选路径。
-    
+
     功能说明：
         在当前Python脚本文件所在的目录层级中，搜索可能存在指定可执行文件（如ffmpeg）的路径。
         搜索范围包括从当前目录到最顶层目录的每一级目录，并在每级目录下的三个固定子目录中查找。
-    
+
     参数：
         binary_name (str): 要查找的可执行文件名（不含扩展名），例如 'ffmpeg'。
-    
+
     返回值：
         list[Path]: 包含所有可能的可执行文件完整路径的列表。路径为Path对象，包括当前目录及其所有父目录下
                    "tools/ffmpeg/bin"、"third_party/ffmpeg/bin"和"bin"三个子目录中的目标文件。

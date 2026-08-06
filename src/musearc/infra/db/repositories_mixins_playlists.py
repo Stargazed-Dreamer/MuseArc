@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-
+from musearc.core.constants import FAVORITES_PLAYLIST_ID, FAVORITES_PLAYLIST_NAME
 from musearc.infra.db.repositories_common import (
-    FAVORITES_PLAYLIST_ID,
-    FAVORITES_PLAYLIST_NAME,
     _placeholders,
     _utc_now_iso,
 )
+
 
 class RepositoryPlaylistsMixin:
     """Repository mixin: playlist and favorites operations."""
@@ -132,7 +131,7 @@ class RepositoryPlaylistsMixin:
         placeholders = _placeholders(len(ids))
         cursor = self.conn.execute(
             f"DELETE FROM playlist_items WHERE playlist_id = ? AND track_id IN ({placeholders})",
-            tuple([playlist_id, *ids]),
+            (playlist_id, *ids),
         )
         self._compact_playlist_positions(playlist_id)
         self.conn.execute("UPDATE playlists SET updated_at = ? WHERE playlist_id = ?", (_utc_now_iso(), playlist_id))

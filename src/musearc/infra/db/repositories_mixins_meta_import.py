@@ -5,8 +5,8 @@ import logging
 from collections.abc import Iterable
 from datetime import datetime
 
+from musearc.core.constants import DEFAULT_TAG_FIELDS
 from musearc.infra.db.repositories_common import (
-    DEFAULT_TAG_FIELDS,
     _normalize_tags,
     _placeholders,
     _utc_now_iso,
@@ -34,7 +34,7 @@ class RepositoryMetaImportMixin:
         if not fields:
             return []
         tracks_rows = self.conn.execute("SELECT ext_json FROM tracks WHERE deleted_at IS NULL").fetchall()
-        counts = {name: 0 for name in fields}
+        counts = dict.fromkeys(fields, 0)
         for row in tracks_rows:
             _, tags = _normalize_tags(row[0] if row else None)
             for name in fields:
@@ -102,7 +102,6 @@ class RepositoryMetaImportMixin:
             )
             updated += 1
         logger.info("[Repo] update_track_tag_values: ids=%s tag=%s val=%r updated=%d", ids, name, cleaned, updated)
-        print(f"[repo] update_track_tag_values: ids={ids} tag={name} val={cleaned!r} updated={updated}")
         return updated
 
     def set_meta(self, key: str, value: str) -> None:

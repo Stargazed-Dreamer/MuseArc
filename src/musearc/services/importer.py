@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """\u5bfc\u5165\u670d\u52a1\u3002
 
@@ -7,18 +7,18 @@
 - \u652f\u6301\u65ad\u70b9\u6062\u590d\u3001\u6682\u505c\u53d6\u6d88\u3001\u72b6\u6001\u6e05\u5355\u4e0e\u8def\u5f84\u7ea7\u5feb\u901f\u8df3\u8fc7\u7d22\u5f15\u3002
 """
 
-import json
 import hashlib
 import html
+import json
 import os
 import re
 import shutil
 import threading
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 
 from musearc.config.models import RuntimeConfig
 from musearc.core.enums import FileHealth
@@ -47,7 +47,7 @@ class ImportDependencies:
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _normalize_tag_key(key: str) -> str:
@@ -526,15 +526,20 @@ def _merge_ext_payload_for_duplicate(primary_payload: object, secondary_payload:
     return merged
 
 
+def _tag_value(line: str, prefix: str) -> str:
+    """从带括号的 LRC 标签行中提取值，例如 _tag_value("[by:作者]", "[by:") -> "作者"。"""
+    return line[len(prefix) : -1].strip()
+
+
 def _extract_lyrics_meta(text: str) -> tuple[str, int, str, str, str]:
     """从歌词文本中提取元数据信息。
-    
+
     该函数解析歌词文本（如LRC格式），提取作者、标题、歌手、专辑和行数等元数据。
     它只扫描前40行，以确保处理效率。
-    
+
     Args:
         text (str): 包含歌词元数据的文本字符串。
-        
+
     Returns:
         tuple[str, int, str, str, str]: 一个包含以下五个元素的元组：
             - author (str): 作者信息
@@ -555,26 +560,21 @@ def _extract_lyrics_meta(text: str) -> tuple[str, int, str, str, str]:
             continue
         low = s.casefold()  # 将文本转换为小写，用于不区分大小写的比较
 
-        # 定义一个内部函数，用于从标签中提取值
-        # 例如：_tag_value("[by:") 会处理 "[by:作者]" 并返回 "作者"
-        def _tag_value(prefix: str) -> str:
-            return s[len(prefix) : -1].strip()
-
         # 检查并提取 [by:] 标签中的作者信息
         if low.startswith("[by:") and s.endswith("]") and not author:
-            author = html.unescape(_tag_value("[by:"))
+            author = html.unescape(_tag_value(s, "[by:"))
             continue
         # 检查并提取 [ti:] 标签中的标题信息
         if low.startswith("[ti:") and s.endswith("]") and not title:
-            title = html.unescape(_tag_value("[ti:"))
+            title = html.unescape(_tag_value(s, "[ti:"))
             continue
         # 检查并提取 [ar:] 标签中的歌手信息
         if low.startswith("[ar:") and s.endswith("]") and not artist:
-            artist = html.unescape(_tag_value("[ar:"))
+            artist = html.unescape(_tag_value(s, "[ar:"))
             continue
         # 检查并提取 [al:] 标签中的专辑信息
         if low.startswith("[al:") and s.endswith("]") and not album:
-            album = html.unescape(_tag_value("[al:"))
+            album = html.unescape(_tag_value(s, "[al:"))
             continue
         # 检查并提取不带方括号的 by: 标签（兼容另一种格式）
         if low.startswith("by:") and not author:
@@ -607,9 +607,6 @@ def _is_placeholder_empty_lyrics(text: str) -> bool:
     return compact == marker_compact
 
 
-import re
-import unicodedata
-from typing import Dict, Set, Tuple
 
 # ==========================================
 # 预编译正则表达式 (提升性能)
@@ -649,17 +646,17 @@ def _infer_lyrics_language_kind(text: str) -> str:
         s = str(raw or "").strip()
         if not s:
             continue
-        
+
         # 剥离时间标签
         if RE_LRC_TIME.match(s):
             s = RE_LRC_TIME.sub("", s).strip()
-        
+
         # 提取元数据标签（更宽容的匹配）
         m = RE_LRC_META.match(s)
         if m:
             meta_values.append(m.group(2).strip())
             continue
-            
+
         if s:
             lines.append(s)
 
@@ -670,7 +667,7 @@ def _infer_lyrics_language_kind(text: str) -> str:
     # ==========================================
     # 1. 字符级别统计
     # ==========================================
-    script_counts: Dict[str, int] = {
+    script_counts: dict[str, int] = {
         "latin": 0, "han": 0, "hiragana": 0, "katakana": 0,
         "hangul": 0, "cyrillic": 0, "arabic": 0, "hebrew": 0,
         "thai": 0, "devanagari": 0,
@@ -684,10 +681,10 @@ def _infer_lyrics_language_kind(text: str) -> str:
         # 必须是 Letter (Ll, Lu, Lt, Lo 等)
         if not unicodedata.category(ch).startswith("L"):
             continue
-            
+
         total_letters += 1
         code = ord(ch)
-        
+
         if _is_han(code):
             script_counts["han"] += 1
         elif 0x3040 <= code <= 0x309F:
@@ -729,7 +726,7 @@ def _infer_lyrics_language_kind(text: str) -> str:
 
     kana_count = script_counts["hiragana"] + script_counts["katakana"]
     han_count = script_counts["han"]
-    
+
     # 日语的科学判定：必须存在假名，或者假名与汉字高度混合
     # 放弃原来的 0.02 极低阈值，要求假名必须有实际存在感
     if kana_count > 0:
@@ -749,7 +746,7 @@ def _infer_lyrics_language_kind(text: str) -> str:
         "th": _ratio(script_counts["thai"]),
         "hi": _ratio(script_counts["devanagari"]),
     }
-    
+
     # 如果非拉丁语系占比超过 40%，则认为是该语言（允许最多 60% 的拉丁字母混血）
     dominant_non_latin = max(non_latin_ratios.items(), key=lambda x: x[1])
     if dominant_non_latin[1] >= 0.40:
@@ -771,7 +768,7 @@ def _infer_lyrics_language_kind(text: str) -> str:
     word_set = set(words)
 
     # 停用词表
-    stop_words: Dict[str, Set[str]] = {
+    stop_words: dict[str, set[str]] = {
         "en": {"the", "and", "you", "to", "of", "in", "is", "my", "me", "i", "it"},
         "es": {"que", "de", "la", "el", "y", "en", "no", "te", "se", "un", "una"},
         "fr": {"je", "tu", "il", "elle", "de", "la", "le", "et", "pas", "que", "un", "une"},
@@ -782,7 +779,7 @@ def _infer_lyrics_language_kind(text: str) -> str:
     }
 
     # 特征字符（按语言分组）
-    lang_marks: Dict[str, Set[str]] = {
+    lang_marks: dict[str, set[str]] = {
         "es": {"á", "é", "í", "ó", "ú", "ñ", "ü", "¿", "¡"},
         "fr": {"à", "â", "ç", "é", "è", "ê", "ë", "î", "ï", "ô", "û", "ù", "ü", "ÿ", "œ", "æ", "«", "»"},
         "de": {"ä", "ö", "ü", "ß"},
@@ -792,12 +789,12 @@ def _infer_lyrics_language_kind(text: str) -> str:
     }
 
     # 科学的打分机制
-    scores: Dict[str, float] = {lang: 0.0 for lang in stop_words.keys()}
+    scores: dict[str, float] = dict.fromkeys(stop_words.keys(), 0.0)
 
     for lang, stops in stop_words.items():
         # 停用词命中数（强特征）
         scores[lang] += len(word_set.intersection(stops)) * 2.0
-        
+
         # 特殊标点命中（极强特征，如西班牙语的 ¿）
         punctuation_hits = sum(1 for ch in body if ch in lang_marks.get(lang, set()) and not ch.isalpha())
         scores[lang] += punctuation_hits * 5.0
@@ -824,11 +821,11 @@ def _infer_lyrics_language_kind(text: str) -> str:
 
     # 决策
     best_lang = max(scores, key=scores.get)
-    
+
     # 如果没有任何特征词，且没有任何扩展拉丁字符，兜底英语
     if best_lang == "en" and scores["en"] <= pure_latin_ratio * 3.0 + 0.1:
         return "en"
-        
+
     return best_lang
 
 

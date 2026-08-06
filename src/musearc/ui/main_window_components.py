@@ -6,7 +6,6 @@ from musearc.ui.main_window_helpers import (
     _apply_button_scale,
     _history_action_label,
 )
-from musearc.ui.track_grid import LyricsTableModel, TrackGridWidget, TrackTableView
 from musearc.ui.main_window_pages import (
     FullScanPage,
     LyricsManagementPage,
@@ -15,6 +14,7 @@ from musearc.ui.main_window_pages import (
     TracksPage,
     TrashPage,
 )
+from musearc.ui.track_grid import LyricsTableModel, TrackGridWidget, TrackTableView
 
 __all__ = [
     "_apply_button_scale",

@@ -74,7 +74,7 @@ start.bat
 
 - **PyAV 导入**：`import av` 即可，不要尝试 `pip install ffmpeg-python`，这是两个不同的库
 - **Chromaprint 路径**：DLL 路径在运行时通过 `tools/chromaprint/bin/` 解析，**绝不**硬编码绝对路径
-- **SQLite 并发**：本项目是单进程桌面应用，**绝不**启用 WAL 模式或多连接池
+- **SQLite 并发**：本项目是单进程桌面应用，使用 `with db.session()` 每次创建并关闭连接（无连接池复用）。`connection.py` 会尝试启用 WAL 模式以提升多线程读取并发（导入 worker 线程读取时不阻塞 UI 查询），在只读/受限环境自动回退；**绝不**使用多连接池
 - **QThread**：`import_worker.py` 中的 worker **必须**用信号槽通信，**绝不**直接操作 UI 控件
 
 ## 项目结构
@@ -85,6 +85,8 @@ MuseArc/
 │   ├── core/                   # 领域基础层（无副作用）
 │   │   ├── models.py           # 数据模型（TrackInsert, LyricsInsert, ImportReport）
 │   │   ├── enums.py            # 枚举（DuplicateDecision, ReviewKind, TrackKind）
+│   │   ├── exceptions.py       # 领域异常基类（MuseArcError 及子类）
+│   │   ├── constants.py        # 共享常量（FAVORITES_PLAYLIST_ID 等）
 │   │   ├── hashing.py          # 哈希工具
 │   │   ├── ids.py              # ID 生成
 │   │   ├── paths.py            # 路径工具
@@ -94,14 +96,27 @@ MuseArc/
 │   │   ├── models.py           # 配置模型（RuntimeConfig, LmStudioConfig, UiConfig）
 │   │   └── store.py            # 配置持久化
 │   ├── infra/                  # 基础设施层
-│   │   ├── db/                 # 数据库（schema.sql + connection + repositories + mixins）
+│   │   ├── logging.py          # 统一日志配置（configure_logging）
+│   │   ├── db/                 # 数据库
+│   │   │   ├── schema.sql      # 表结构 + 索引
+│   │   │   ├── connection.py   # 连接管理 + schema 迁移
+│   │   │   ├── repositories.py # 仓储主类
+│   │   │   ├── repositories_common.py          # 仓储共享辅助与常量重导出
+│   │   │   └── repositories_mixins_*.py        # 仓储 mixin（tracks_lyrics, ops, meta_import, playlists, tracks_maintenance）
 │   │   ├── llm/client.py       # LM Studio 匹配器
-│   │   ├── media/              # 媒体处理（audio_io, fingerprint, prober, tag_writer, transcoder）
+│   │   ├── media/              # 媒体处理
+│   │   │   ├── audio_io.py     # PyAV 音频解码
+│   │   │   ├── fingerprint.py  # 音频指纹（Chromaprint）
+│   │   │   ├── prober.py       # 媒体探测
+│   │   │   ├── tag_writer.py   # 标签读写（mutagen）
+│   │   │   ├── transcoder.py   # PyAV 转码
+│   │   │   ├── commands.py     # MediaCommandError 异常基类
+│   │   │   └── ffmpeg_tools.py # ffmpeg 路径查找（保留,当前未使用）
 │   │   └── player/client.py    # 外部播放器 TCP JSON Lines 客户端
 │   ├── services/               # 领域服务层
 │   │   ├── importer.py         # 导入服务
 │   │   ├── importer_pipeline.py # 导入流水线
-│   │   ├── import_runtime.py   # 导入运行时
+│   │   ├── import_runtime.py   # 导入运行时（ImportControl）
 │   │   ├── dedupe.py           # 去重判定
 │   │   ├── lyrics_match.py     # 歌词匹配
 │   │   ├── exporter.py         # 导出服务
@@ -110,12 +125,13 @@ MuseArc/
 │   │   └── scanner.py          # 文件扫描
 │   ├── app/                    # 应用外观层
 │   │   ├── cli.py              # CLI 入口（typer）
-│   │   ├── facade.py           # Facade 主类
+│   │   ├── facade.py           # Facade 主类（唯一外观入口,UI 仅经此访问后端）
 │   │   ├── facade_mixins_*.py  # Facade mixin（import_export, library, runtime）
-│   │   └── action_log.py       # 操作日志
+│   │   └── action_log.py       # 操作日志（app_logs.json）
 │   ├── ui/                     # 界面层（PySide6）
 │   │   ├── app.py              # UI 启动入口
-│   │   ├── main_window*.py     # 主窗口（拆分为 logic, components, helpers, pages）
+│   │   ├── main_window*.py     # 主窗口（拆分为 logic, components, helpers）
+│   │   ├── main_window_pages*.py # 主窗口页面（tracks, lyrics, ops, common）
 │   │   ├── review_page*.py     # 审查页（拆分为 song, lyrics mixin）
 │   │   ├── import_*.py         # 导入相关（dialog, management_page, worker）
 │   │   ├── player_bar.py       # 内置播放器栏
@@ -132,6 +148,9 @@ MuseArc/
 │   │   └── theme.py            # 主题管理
 │   └── ui_contracts/           # UI 契约层
 │       └── import_review.py    # 导入审查接口
+├── tests/                      # 自动化测试（pytest）
+│   ├── conftest.py             # pytest 全局配置（sys.path 设置）
+│   └── core/                   # core 层纯函数测试
 ├── realLib/                    # 实际音乐库数据（gitignore）
 │   ├── db/musearc.db           # SQLite 数据库
 │   ├── data/tracks/            # 归档音频文件
@@ -140,13 +159,18 @@ MuseArc/
 ├── tools/                      # 外部工具
 │   ├── chromaprint/bin/        # Chromaprint DLL（Windows）
 │   └── export_build.py         # 导出构建脚本
-├── docs/                       # 项目文档
+├── docs/                       # 项目文档（见 docs/README.md 索引）
 ├── .agents/skills/             # Skill 定义文件
 │   ├── _index.md               # Skill 索引（入口）
 │   └── *.md                    # 各 Skill 定义
 ├── .trae/rules/                # AI 规则
 │   └── project_rules.md        # 功能变更检查清单
-├── pyproject.toml              # 项目配置、依赖、构建
+├── .github/workflows/          # CI/CD（lint + test）
+├── pyproject.toml              # 项目配置、依赖、构建、工具链
+├── config.json.example         # 配置文件模板（含全部默认字段）
+├── LICENSE                     # MIT 许可证
+├── CONTRIBUTING.md             # 贡献指南
+├── CHANGELOG.md                # 更新日志
 └── start.bat                   # Windows 快速启动
 ```
 

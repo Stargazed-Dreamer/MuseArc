@@ -22,10 +22,10 @@ LYRICS_EXTENSIONS = {".lrc"}
 
 def scan_import_source(source_root: Path) -> tuple[list[ImportCandidate], list[ImportCandidate]]:
     """扫描指定的源目录，识别并分类其中的音频文件和歌词文件。
-    
+
     Args:
         source_root (Path): 要扫描的根目录路径。
-    
+
     Returns:
         tuple[list[ImportCandidate], list[ImportCandidate]]: 一个包含两个列表的元组，第一个列表包含音频文件的候选信息，第二个列表包含歌词文件的候选信息。
     """

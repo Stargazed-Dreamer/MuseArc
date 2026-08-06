@@ -14,8 +14,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
-    QFrame,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -107,10 +107,10 @@ def _looks_like_hash_filename(name: str) -> bool:
 def _format_rank(value: str | None) -> int:
     """
     根据音频格式名称返回一个排名值。
-    
+
     参数：
     value (str | None): 音频格式名称的字符串，可能为None。
-    
+
     返回：
     int: 音频格式的排名值，范围从40到90，根据格式类型而定。
     """

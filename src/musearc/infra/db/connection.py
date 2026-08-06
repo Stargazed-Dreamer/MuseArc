@@ -87,16 +87,16 @@ class DbManager:
     def _migrate_schema(conn: sqlite3.Connection) -> None:
         """
         执行数据库模式的迁移和更新，确保数据库表结构符合最新要求。
-    
+
         该方法会检查并添加缺失的列，创建必要的表，并修正历史数据以保持数据一致性。
-    
+
         参数:
             conn (sqlite3.Connection): 数据库连接对象
-    
+
         返回:
             None: 该方法不返回任何值，直接修改数据库结构。
         """
-    
+
         def table_exists(table: str) -> bool:
             """检查指定的表是否存在于数据库中。"""
             row = conn.execute(
@@ -104,31 +104,31 @@ class DbManager:
                 (table,),
             ).fetchone()
             return bool(row)
-    
+
         def has_column(table: str, column: str) -> bool:
             """检查指定的表中是否存在指定的列。"""
             if not table_exists(table):
                 return False
             rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
             return any(str(row[1]) == column for row in rows)
-    
+
         def add_column_if_missing(table: str, ddl: str, column: str) -> None:
             """如果表存在且缺少指定列，则添加该列。"""
             if not table_exists(table):
                 return
             if not has_column(table, column):
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
-    
+
         # 为tracks表添加缺失的列，这些列用于存储文件名、语言类型、偏好等级等元数据
         add_column_if_missing("tracks", "file_name TEXT NOT NULL DEFAULT ''", "file_name")
         add_column_if_missing("tracks", "language_kind TEXT NOT NULL DEFAULT ''", "language_kind")
         add_column_if_missing("tracks", "preference_level INTEGER NOT NULL DEFAULT 5", "preference_level")
         add_column_if_missing("tracks", "source_fullpath TEXT NOT NULL DEFAULT ''", "source_fullpath")
         add_column_if_missing("tracks", "storage_format TEXT NOT NULL DEFAULT ''", "storage_format")
-    
+
         # 为playlist_items表添加缺失的entry列，用于存储播放列表条目信息
         add_column_if_missing("playlist_items", "entry INTEGER NOT NULL DEFAULT -1", "entry")
-    
+
         # 为lyrics表添加缺失的列，用于存储歌词元数据
         add_column_if_missing("lyrics", "lyrics_title TEXT NOT NULL DEFAULT ''", "lyrics_title")
         add_column_if_missing("lyrics", "lyrics_artist TEXT NOT NULL DEFAULT ''", "lyrics_artist")
@@ -136,14 +136,14 @@ class DbManager:
         add_column_if_missing("lyrics", "lyrics_author TEXT NOT NULL DEFAULT ''", "lyrics_author")
         add_column_if_missing("lyrics", "line_count INTEGER NOT NULL DEFAULT 0", "line_count")
         add_column_if_missing("lyrics", "deleted_at TEXT", "deleted_at")
-    
+
         # 为tracks表添加缺失的fingerprint_hash32列，用于存储音频指纹哈希值
         add_column_if_missing("tracks", "fingerprint_hash32 INTEGER", "fingerprint_hash32")
-    
+
         # 如果playlist_items表存在，则将旧的position列数据迁移到新的entry列（仅对未初始化的条目）
         if table_exists("playlist_items"):
             conn.execute("UPDATE playlist_items SET entry = position WHERE entry < 0")
-    
+
         # 确保tracks表中的偏好等级数据在有效范围内（1-10）
         if table_exists("tracks"):
             conn.execute(
@@ -164,7 +164,7 @@ class DbManager:
                 WHERE TRIM(storage_format) = ''
                 """
             )
-    
+
         # 创建tag_fields表，如果它尚不存在，用于存储标签字段信息
         conn.execute(
             """

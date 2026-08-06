@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 
+from musearc.core.constants import FAVORITES_PLAYLIST_ID
 from musearc.core.models import UndoAction
 from musearc.infra.db.repositories_common import (
-    FAVORITES_PLAYLIST_ID,
     _placeholders,
     _utc_now_iso,
 )
+
 
 class RepositoryOpsMixin:
     """Repository mixin: undo and fullscan queue operations."""
@@ -146,7 +147,7 @@ class RepositoryOpsMixin:
         placeholders = _placeholders(len(ids))
         cursor = self.conn.execute(
             f"DELETE FROM fullscan_work_items WHERE work_id = ? AND track_id IN ({placeholders})",
-            tuple([work_id, *ids]),
+            (work_id, *ids),
         )
         self._compact_fullscan_queue(work_id)
         self.conn.execute("UPDATE fullscan_works SET updated_at = ? WHERE work_id = ?", (_utc_now_iso(), work_id))
@@ -160,7 +161,7 @@ class RepositoryOpsMixin:
         placeholders = _placeholders(len(ids))
         cursor = self.conn.execute(
             f"UPDATE fullscan_work_items SET status = ?, updated_at = ? WHERE work_id = ? AND track_id IN ({placeholders})",
-            tuple([status, _utc_now_iso(), work_id, *ids]),
+            (status, _utc_now_iso(), work_id, *ids),
         )
         self.conn.execute("UPDATE fullscan_works SET updated_at = ? WHERE work_id = ?", (_utc_now_iso(), work_id))
         return cursor.rowcount

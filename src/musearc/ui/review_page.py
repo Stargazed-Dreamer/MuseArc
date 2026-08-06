@@ -6,9 +6,9 @@
 ??????????????????
 """
 
+import re
 from collections import deque
 from pathlib import Path
-import re
 from time import monotonic
 
 from PySide6.QtCore import Qt, Signal
@@ -21,16 +21,16 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSplitter,
-    QTabWidget,
     QTableView,
+    QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -38,9 +38,9 @@ from PySide6.QtWidgets import (
 )
 
 from musearc.app.facade import MuseArcFacade
-from musearc.ui.table_models import ColumnDef, DictTableModel
-from musearc.ui.review_page_mixins_song import ReviewPageSongMixin
 from musearc.ui.review_page_mixins_lyrics import ReviewPageLyricsMixin
+from musearc.ui.review_page_mixins_song import ReviewPageSongMixin
+from musearc.ui.table_models import ColumnDef, DictTableModel
 
 
 def _apply_button_scale(button: QPushButton, scale: float) -> None:
@@ -197,11 +197,11 @@ def _derive_lyrics_group_title(group_key: str, source_rel: str) -> str:
 
 def _derive_song_group_title(group_key: str, source_path: str) -> str:
     """根据提供的组键和源路径，衍生歌曲组标题。
-    
+
     参数:
         group_key (str): 组的键，可能为空或包含其他字符。
         source_path (str): 源文件的路径，用于提取文件名。
-    
+
     返回值:
         str: 衍生的标题字符串。如果组键有效则使用组键，否则从文件名中清理出标题，或返回默认值。
     """
@@ -623,13 +623,13 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
 
     def _build_lyrics_tab(self) -> None:
         """构建“歌词”标签页的UI布局。
-    
+
         该方法负责创建歌词标签页的所有图形界面元素，包括顶部按钮行、左侧歌词文件分组滚动区域和右侧歌词对比预览区。
         所有控件通过布局管理器进行组织，并将相关信号连接到槽函数。
-    
+
         参数:
             self (MainWindow): 主窗口实例。
-    
+
         返回:
             None: 此方法无返回值，仅完成UI构建。
         """
@@ -757,13 +757,13 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
 
     def _build_other_tab(self) -> None:
         """构建"其他"选项卡的UI界面。
-    
+
         该方法负责初始化并设置"其他"选项卡的所有用户界面元素，
         包括按钮、标签、树形控件和布局，并为按钮绑定相应的事件处理函数。
-    
+
         参数:
             self (QWidget): 类实例本身，用于访问实例属性和方法。
-    
+
         返回值:
             None: 该方法没有返回值，直接构建UI。
         """
@@ -1444,36 +1444,36 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
     @staticmethod
     def _iter_tree_leaf_items(tree: QTreeWidget) -> list[QTreeWidgetItem]:
         """遍历QTreeWidget，返回所有有效叶子节点的列表
-    
+
         Args:
             tree: QTreeWidget 控件对象
-        
+
         Returns:
             list[QTreeWidgetItem]: 包含所有有效叶子节点的列表
         """
         out: list[QTreeWidgetItem] = []  # 存储结果的列表
         # 初始化栈，包含树的所有顶层项（第一层节点）
         stack = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
-    
+
         while stack:  # 当栈不为空时继续遍历
             node = stack.pop()  # 弹出栈顶节点进行处理
-        
+
             # 将当前节点的所有子节点压入栈中（深度优先遍历）
             for i in range(node.childCount()):
                 stack.append(node.child(i))
-        
+
             # 获取节点的数据（第0列，用户角色数据）
             row = node.data(0, Qt.ItemDataRole.UserRole) or {}
-        
+
             if not row:  # 如果没有数据则跳过
                 continue
-            
+
             # 跳过特定类型的行（元数据行、链接行、页脚行）
             if row.get("_meta_row") or row.get("_link_row") or row.get("_footer"):
                 continue
-            
+
             out.append(node)  # 将有效叶子节点加入结果列表
-        
+
         return out  # 返回收集到的叶子节点列表
 
     def _group_parent_of(self, item: QTreeWidgetItem | None) -> QTreeWidgetItem | None:
@@ -1500,10 +1500,10 @@ class ReviewPage(ReviewPageSongMixin, ReviewPageLyricsMixin, QWidget):
 
     def _iter_meta_children(self, item: QTreeWidgetItem) -> list[QTreeWidgetItem]:
         """遍历指定树形控件项的所有子项，筛选出包含元数据行的子项。
-    
+
         Args:
             item (QTreeWidgetItem): 要遍历其子项的树形控件项
-        
+
         Returns:
             list[QTreeWidgetItem]: 包含所有符合条件的子项的列表
         """

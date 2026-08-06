@@ -51,16 +51,16 @@ def _pick_writable_dir(candidates: list[Path]) -> Path:
 
 def _config_dir() -> Path:
     """获取配置目录。
-    
+
     该函数用于确定应用程序的配置目录路径。它会检查多个候选目录位置，
     并返回第一个可写的目录路径。优先级依次为：
     1. Windows系统下的APPDATA环境变量对应目录下的"MuseArc"子目录。
     2. 用户主目录下的".musearc"隐藏目录。
     3. 当前工作目录下的".musearc"隐藏目录。
-    
+
     Args:
         无参数。
-        
+
     Returns:
         Path: 返回一个可写的配置目录路径。
     """

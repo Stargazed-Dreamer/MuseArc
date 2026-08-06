@@ -1,7 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+from musearc.core.constants import FAVORITES_PLAYLIST_ID
 from musearc.core.ids import new_id
-from musearc.infra.db.repositories import FAVORITES_PLAYLIST_ID, LibraryRepository
+from musearc.infra.db.repositories import LibraryRepository
 
 
 class LibraryOpsService:

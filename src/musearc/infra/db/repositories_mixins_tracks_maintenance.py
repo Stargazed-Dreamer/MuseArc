@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from musearc.core.constants import FAVORITES_PLAYLIST_ID
 from musearc.infra.db.repositories_common import (
-    FAVORITES_PLAYLIST_ID,
     _placeholders,
     _utc_now_iso,
 )
+
 
 class RepositoryTracksMaintenanceMixin:
     """Repository mixin: track search/delete/restore maintenance operations."""
@@ -120,7 +121,7 @@ class RepositoryTracksMaintenanceMixin:
             WHERE track_id IN ({placeholders})
               AND deleted_at IS NULL
             """,
-            tuple([now, now, *ids]),
+            (now, now, *ids),
         )
         return cursor.rowcount
 
@@ -163,7 +164,7 @@ class RepositoryTracksMaintenanceMixin:
             SET deleted_at = NULL, updated_at = ?
             WHERE track_id IN ({placeholders})
             """,
-            tuple([now, *ids]),
+            (now, *ids),
         )
         return cursor.rowcount
 

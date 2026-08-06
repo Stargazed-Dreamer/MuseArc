@@ -1,37 +1,35 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
-
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QButtonGroup,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMenu,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QSplitter,
     QTableView,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
-    QAbstractItemView,
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
-    QDoubleSpinBox,
-    QRadioButton,
-    QButtonGroup,
-    QLineEdit,
 )
-from PySide6.QtGui import QAction
 
 from musearc.app.facade import FAVORITES_PLAYLIST_ID, MuseArcFacade
-from musearc.ui.table_models import ColumnDef, DictTableModel
-from musearc.ui.track_grid import TrackGridWidget, _copy_selected_cells, _install_copy_support
+from musearc.ui.long_task import make_chunked_task, run_modal_task
 from musearc.ui.main_window_helpers import (
     _apply_button_scale,
     _choose_or_create_playlist,
@@ -45,7 +43,8 @@ from musearc.ui.main_window_helpers import (
     _storage_path_for_track_row,
 )
 from musearc.ui.main_window_pages_common import _queue_play_tracks, _release_player_for_file_ops
-from musearc.ui.long_task import make_chunked_task, run_modal_task
+from musearc.ui.table_models import ColumnDef, DictTableModel
+from musearc.ui.track_grid import TrackGridWidget, _copy_selected_cells, _install_copy_support
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +76,7 @@ def _run_chunked_ids_modal(
         chunk_size (int, optional): 分块大小，默认为512。
 
     返回值：
-        tuple[dict, bool]: 
+        tuple[dict, bool]:
             - dict: 处理结果，包含 'processed'、'affected' 和 'cancelled' 键。
             - bool: 表示任务是否被取消。
     """
@@ -215,10 +214,10 @@ class FullScanPage(QWidget):
 
     def reload_works(self) -> None:
         """从数据源重新加载所有任务到下拉框，并尝试保持之前的选择状态。
-    
+
         该方法用于刷新当前任务选择控件，清空旧选项并从后端获取最新的任务列表，
         随后尝试恢复用户之前选中的任务，最后触发一次选择变更事件以更新界面。
-    
+
         Args:
             self: 实例对象自身。
         Returns:
@@ -270,15 +269,15 @@ class FullScanPage(QWidget):
     def on_work_changed(self) -> None:
         """
         当工作项目选择发生变化时触发的处理方法。
-    
+
         功能：
             1. 检查当前选择的工作项目是否有效
             2. 根据选择的工作项目加载对应的扫描工作项
             3. 更新网格显示和状态信息
-    
+
         参数：
             无（除了self实例引用）
-    
+
         返回值：
             无
         """
@@ -290,16 +289,16 @@ class FullScanPage(QWidget):
             self.grid.set_tracks([])
             # 提前返回，不执行后续操作
             return
-    
+
         # 获取当前选择的工作ID，并将其转换为字符串类型存储
         self.current_work_id = str(self.combo_work.currentData())
-    
+
         # 通过门面模式获取当前工作项目的完整扫描工作项数据，限制最多获取200万条记录
         rows = self.facade.get_fullscan_work_items(self.current_work_id, limit=2_000_000)
-    
+
         # 将获取到的工作项数据设置到网格控件中显示
         self.grid.set_tracks(rows)
-    
+
         # 更新网格状态栏，显示当前加载的工作项总数
         self.grid.set_status(f"工作项目 {len(rows)} 条")
     def create_work(self) -> None:
@@ -654,13 +653,13 @@ class FullScanPage(QWidget):
 
     def on_delete(self) -> None:
         """处理删除操作的方法。
-    
+
         将选中的曲目移动到回收站，支持分块处理。
         功能包括验证操作前提、选择删除模式、执行分块删除、更新界面状态。
-    
+
         参数:
             self: 实例对象本身，包含当前工作区、选中曲目、界面控件等状态。
-    
+
         返回值:
             None: 该方法无返回值，通过副作用执行删除操作并更新界面。
         """
@@ -875,10 +874,10 @@ class TrashPage(QWidget):
     def __init__(self, facade: MuseArcFacade):
         """
         初始化已删除项目管理对话框
-    
+
         参数:
             facade (MuseArcFacade): 门面对象，用于访问应用的各种功能
-    
+
         返回值:
             None
         """
@@ -894,7 +893,7 @@ class TrashPage(QWidget):
         self.btn_delete_file.setStyleSheet("background-color:#b3261e;color:white;")  # 设置红色背景样式
         self.btn_delete_meta = QPushButton("删除元数据")  # 删除元数据按钮
         self.btn_delete_meta.setStyleSheet("background-color:#8b1e1e;color:white;")  # 设置深红色背景样式
-    
+
         # 将按钮添加到按钮行
         row.addWidget(self.btn_restore)
         row.addWidget(self.btn_delete_file)
@@ -914,7 +913,7 @@ class TrashPage(QWidget):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)  # 设置无边距布局
         left_layout.addWidget(QLabel("文件仍在（可恢复 / 可彻底删文件）"))  # 添加标题标签
-    
+
         # 创建左侧表格的数据模型
         self.left_model = DictTableModel(
             [
@@ -926,7 +925,7 @@ class TrashPage(QWidget):
                 ColumnDef("item_id", "ID"),             # ID列
             ]
         )
-    
+
         # 创建左侧表格视图
         self.left_table = QTableView()
         self.left_table.setModel(self.left_model)  # 设置数据模型
@@ -937,11 +936,11 @@ class TrashPage(QWidget):
         self.left_table.setSortingEnabled(True)  # 启用排序功能
         self.left_table.horizontalHeader().setStretchLastSection(True)  # 最后一列拉伸填充
         _install_copy_support(self.left_table)  # 安装复制支持功能
-    
+
         # 设置表格上下文菜单（右键菜单）
         self.left_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.left_table.customContextMenuRequested.connect(lambda pos: self._show_context_menu(self.left_table, pos))
-    
+
         # 将表格添加到左侧布局，拉伸因子为1
         left_layout.addWidget(self.left_table, 1)
 
@@ -950,7 +949,7 @@ class TrashPage(QWidget):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)  # 设置无边距布局
         right_layout.addWidget(QLabel("仅元数据（文件已删）"))  # 添加标题标签
-    
+
         # 创建右侧表格的数据模型
         self.right_model = DictTableModel(
             [
@@ -962,7 +961,7 @@ class TrashPage(QWidget):
                 ColumnDef("item_id", "ID"),             # ID列
             ]
         )
-    
+
         # 创建右侧表格视图
         self.right_table = QTableView()
         self.right_table.setModel(self.right_model)  # 设置数据模型
@@ -973,11 +972,11 @@ class TrashPage(QWidget):
         self.right_table.setSortingEnabled(True)  # 启用排序功能
         self.right_table.horizontalHeader().setStretchLastSection(True)  # 最后一列拉伸填充
         _install_copy_support(self.right_table)  # 安装复制支持功能
-    
+
         # 设置表格上下文菜单（右键菜单）
         self.right_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.right_table.customContextMenuRequested.connect(lambda pos: self._show_context_menu(self.right_table, pos))
-    
+
         # 将表格添加到右侧布局，拉伸因子为1
         right_layout.addWidget(self.right_table, 1)
 
@@ -1012,7 +1011,7 @@ class TrashPage(QWidget):
         self.excluded_table.horizontalHeader().setStretchLastSection(True)
         _install_copy_support(self.excluded_table)
         root.addWidget(self.excluded_table, 0)
-    
+
         # 创建状态标签并添加到布局
         self.status = QLabel("-")
         root.addWidget(self.status)
@@ -1055,17 +1054,17 @@ class TrashPage(QWidget):
 
     def reload_trash(self) -> None:
         """重新加载回收站内容，根据文件存在状态将数据分为左右两栏显示。
-    
+
         功能：
             从后端获取已删除项目列表，按文件是否存在分为两组：
             - left_rows: 文件仍然存在的记录
             - right_rows: 仅保留元数据的记录
-        
+
             更新左右视图模型并刷新状态栏统计信息。
-    
+
         参数：
             无
-    
+
         返回值：
             None
         """
@@ -1132,13 +1131,13 @@ class TrashPage(QWidget):
     def _selected_items(self) -> list[dict]:
         """
         获取当前已选中的项目列表。
-    
+
         该方法从左右两侧的表格中提取已选中的行数据，
         基于项目类型和项目ID进行去重处理，并返回去重后的项目列表。
-    
+
         Args:
             self: 实例对象本身。
-    
+
         Returns:
             list[dict]: 包含所有选中项目信息的字典列表，每个字典代表一个项目。
         """
@@ -1344,15 +1343,15 @@ class TrashPage(QWidget):
     def _show_context_menu(self, table: QTableView, pos) -> None:
         """
         显示表格的右键上下文菜单。
-    
+
         功能：
             根据传入的表格（左表或右表）和鼠标位置，显示一个包含多种操作选项的右键菜单。
             用户选择菜单项后，会触发对应的操作（如恢复文件、删除、查看详情等）。
-    
+
         参数：
             table (QTableView): 触发菜单的表格视图对象，用于判断是左表还是右表。
             pos (QPoint): 鼠标点击的局部坐标（相对于表格的viewport）。
-    
+
         返回值：
             None: 此方法不返回任何值，所有操作通过调用其他方法或显示消息框完成。
         """
@@ -1563,13 +1562,13 @@ class TagManagementPage(QWidget):
 
     def reload_tags(self) -> None:
         """重新加载标签列表到树形控件中。
-    
+
         该方法从数据源获取所有标签信息，清空并重新填充树形控件，同时尝试保持或恢复之前选中的标签项。
         如果没有可选标签，则会清空关联网格并显示提示信息。
-    
+
         参数：
             无（方法依赖self实例的状态和facade数据接口）
-    
+
         返回值：
             无（直接操作界面控件）
         """
@@ -1661,7 +1660,7 @@ class TagManagementPage(QWidget):
 
     def _on_add(self) -> None:
         """新增一个标签字段。
-    
+
         功能：弹出对话框让用户输入新标签名称，若名称有效则创建该标签，并更新界面。
         参数：self - 指向当前实例的引用。
         返回值：None
@@ -1694,10 +1693,10 @@ class TagManagementPage(QWidget):
 
         该方法通过弹窗确认用户意图，调用外观层（facade）执行标签删除操作，
         并在成功后更新界面状态与组件。
-    
+
         Args:
             self: 类实例自身。
-    
+
         Returns:
             None: 该方法无返回值，但会触发界面更新和信号发射。
         """
@@ -1718,14 +1717,14 @@ class TagManagementPage(QWidget):
 
     def _remove_selected_from_tag(self) -> None:
         """从标签中移除选中的曲目。
-    
+
         功能：
             将当前选中的曲目从指定的标签中移除（将标签值置为空字符串）。
             操作会以分块方式执行，并在状态栏显示处理结果。
-        
+
         参数：
             无参数（方法通过self访问实例属性和调用其他方法）。
-        
+
         返回值：
             None（无返回值）。
         """
@@ -1790,7 +1789,7 @@ class TagManagementPage(QWidget):
 
     def _open_tools_menu(self) -> None:
         """打开工具菜单，提供计算喜爱程度和喜好同步等功能。
-    
+
         功能：创建并显示一个右键菜单，根据用户选择的操作执行相应计算和数据同步。
         参数：无
         返回值：无
@@ -1857,7 +1856,7 @@ class TagManagementPage(QWidget):
 
     def _on_unfavorite(self) -> None:
         """处理取消收藏操作
-    
+
         功能：获取当前选中的已收藏曲目，将其从收藏列表中移除，并更新界面状态和库信息。
         参数：无
         返回值：无
@@ -1865,20 +1864,20 @@ class TagManagementPage(QWidget):
         tracks = self._selected_tracks()
         # 从选中的曲目中筛选出已收藏的曲目，并提取其track_id
         track_ids = [str(t.get("track_id", "")) for t in tracks if t.get("track_id") and bool(t.get("is_favorite"))]
-    
+
         # 如果没有找到可取消收藏的曲目，则提前结束方法
         if not track_ids:
             return
-    
+
         # 调用facade层移除收藏，并获取实际移除的数量
         count = self.facade.remove_from_favorites(track_ids)
-    
+
         # 在网格控件中显示操作结果状态
         self.grid.set_status(f"已取消收藏 {count} 条")
-    
+
         # 重新加载当前标签下的曲目列表
         self._reload_tracks_for_current_tag()
-    
+
         # 发射库数据变化信号，通知其他组件更新
         self.library_changed.emit()
 

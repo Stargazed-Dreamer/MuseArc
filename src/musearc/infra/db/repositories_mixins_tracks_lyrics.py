@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
@@ -230,12 +230,11 @@ class RepositoryTracksLyricsMixin:
             logger.debug("[Repo] update_tracks_fields: 过滤后 patch 为空, 原始 fields=%s", list(fields.keys()))
             return 0
 
-        set_items = [f"{k} = ?" for k in patch.keys()]
+        set_items = [f"{k} = ?" for k in patch]
         set_items.append("updated_at = ?")
         placeholders = _placeholders(len(ids))
         params = [*patch.values(), _utc_now_iso(), *ids]
         logger.info("[Repo] update_tracks_fields: ids=%s patch=%s", ids, list(patch.keys()))
-        print(f"[repo] update_tracks_fields: ids={ids} patch={list(patch.keys())}")
         cursor = self.conn.execute(
             f"""
             UPDATE tracks
@@ -580,7 +579,7 @@ class RepositoryTracksLyricsMixin:
         placeholders = _placeholders(len(ids))
         cursor = self.conn.execute(
             f"UPDATE lyrics SET lyrics_author = ? WHERE lyrics_id IN ({placeholders}) AND deleted_at IS NULL",
-            tuple([str(author), *ids]),
+            (str(author), *ids),
         )
         return int(cursor.rowcount or 0)
 
@@ -605,7 +604,7 @@ class RepositoryTracksLyricsMixin:
         updated = 0
         placeholders = _placeholders(len(ids))
         if patch_direct:
-            set_items = [f"{k} = ?" for k in patch_direct.keys()]
+            set_items = [f"{k} = ?" for k in patch_direct]
             params = [*patch_direct.values(), *ids]
             cursor = self.conn.execute(
                 f"""
@@ -653,7 +652,6 @@ class RepositoryTracksLyricsMixin:
                 )
                 updated += int(cursor.rowcount or 0)
         logger.info("[Repo] update_lyrics_fields: ids=%s fields=%s updated=%d", ids, list(fields.keys()), updated)
-        print(f"[repo] update_lyrics_fields: ids={ids} fields={list(fields.keys())} updated={updated}")
         return updated
 
     def delete_lyrics(self, lyrics_ids: Iterable[str]) -> list[str]:
@@ -671,7 +669,7 @@ class RepositoryTracksLyricsMixin:
         now = _utc_now_iso()
         self.conn.execute(
             f"UPDATE lyrics SET deleted_at = ? WHERE lyrics_id IN ({placeholders})",
-            tuple([now, *ids]),
+            (now, *ids),
         )
         return [str(r["storage_relpath"] or "") for r in rows if str(r["storage_relpath"] or "")]
 
@@ -684,7 +682,7 @@ class RepositoryTracksLyricsMixin:
         now = _utc_now_iso()
         cursor = self.conn.execute(
             f"UPDATE lyrics SET deleted_at = ? WHERE lyrics_id IN ({placeholders})",
-            tuple([now, *ids]),
+            (now, *ids),
         )
         return int(cursor.rowcount or 0)
 
@@ -906,7 +904,7 @@ class RepositoryTracksLyricsMixin:
             SET status = ?, resolved_at = ?
             WHERE review_id IN ({placeholders}) AND status = 'pending'
             """,
-            tuple([final_status, _utc_now_iso(), *ids]),
+            (final_status, _utc_now_iso(), *ids),
         )
         return int(cursor.rowcount or 0)
 
@@ -935,6 +933,6 @@ class RepositoryTracksLyricsMixin:
             SET status = ?, resolved_at = ?
             WHERE review_id IN ({placeholders})
             """,
-            tuple([final_status, resolved_at, *ids]),
+            (final_status, resolved_at, *ids),
         )
         return int(cursor.rowcount or 0)

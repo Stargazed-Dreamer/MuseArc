@@ -1,12 +1,13 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import requests
 
+from musearc.core.constants import FAVORITES_PLAYLIST_ID
 from musearc.core.hashing import sha1_text
 from musearc.core.ids import new_id
 from musearc.core.paths import ensure_parent, shard_relpath
@@ -15,7 +16,6 @@ from musearc.services.import_runtime import ImportControl, list_resume_states
 from musearc.services.importer import ImportService
 from musearc.services.library_ops import LibraryOpsService
 
-FAVORITES_PLAYLIST_ID = "pl_favorites"
 
 class FacadeImportExportMixin:
     """Facade mixin: import/export and stats workflows."""
@@ -148,7 +148,7 @@ class FacadeImportExportMixin:
                                             lyrics_album=album,
                                             lyrics_author="lrclib",
                                             line_count=len([ln for ln in text.splitlines() if ln.strip()]),
-                                            imported_at=datetime.now(timezone.utc),
+                                            imported_at=datetime.now(UTC),
                                         )
                                     )
 
@@ -250,7 +250,7 @@ class FacadeImportExportMixin:
             rows = repo.get_tracks_by_ids(ids)
             by_id = {str(r.get("track_id", "")): r for r in rows if r.get("track_id")}
             ordered_rows = [by_id[tid] for tid in ids if tid in by_id]
-            exported_at = datetime.now(timezone.utc).isoformat()
+            exported_at = datetime.now(UTC).isoformat()
             hash_seed = f"{'|'.join(ids)}|{exported_at}"
             playlist_hash = hashlib.sha1(hash_seed.encode("utf-8")).hexdigest()
             tracks_out: list[dict] = []
@@ -465,7 +465,7 @@ class FacadeImportExportMixin:
         if schema == "musearc_playlist_export_v1":
             print(f"[import_playlist_stats] 检测到 MuseArc 原生格式 schema={schema}")
         elif self._is_museplayer_playback_stats(payload):
-            print(f"[import_playlist_stats] 检测到 MusePlayer playback_stats 格式，正在转换...")
+            print("[import_playlist_stats] 检测到 MusePlayer playback_stats 格式，正在转换...")
             payload = self._convert_museplayer_playback_stats(payload, file_path)
             print(f"[import_playlist_stats] 转换完成: playlist_hash={payload.get('playlist_hash')}, tracks数={len(payload.get('tracks', []))}")
         else:
@@ -558,7 +558,7 @@ class FacadeImportExportMixin:
                 by_id=by_id,
             )
 
-            now_iso = datetime.now(timezone.utc).isoformat()
+            now_iso = datetime.now(UTC).isoformat()
             source_norm = self._norm_path_for_compare(path)
             history = [
                 r
@@ -827,7 +827,7 @@ class FacadeImportExportMixin:
             ]
             playlist_history.append(
                 {
-                    "imported_at": datetime.now(timezone.utc).isoformat(),
+                    "imported_at": datetime.now(UTC).isoformat(),
                     "playlist_hash": playlist_hash,
                     "source_file": str(path),
                     "playlist_name": playlist_name,

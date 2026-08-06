@@ -1,11 +1,11 @@
 ﻿from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from threading import Event
-from typing import Callable
 
-from PySide6.QtCore import QObject, QEventLoop, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QEventLoop, QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import QDialog, QLabel, QProgressBar, QPushButton, QVBoxLayout, QWidget
 
 ProgressCallback = Callable[[int, int, str], None]
@@ -46,10 +46,10 @@ class _TaskWorker(QObject):
     def __init__(self, task: TaskCallable):
         """
         初始化 Task 对象。
-    
+
         参数:
             task (TaskCallable): 需要执行的任务函数或可调用对象。
-    
+
         返回值:
             无
         """

@@ -21,11 +21,11 @@ from PySide6.QtWidgets import (
 )
 
 from musearc.app.facade import MuseArcFacade
+from musearc.ui.long_task import run_modal_task
+from musearc.ui.main_window_helpers import _apply_button_scale
 from musearc.ui.selection import SelectionController, SelectionMode
 from musearc.ui.table_models import ColumnDef, DictTableModel
 from musearc.ui.track_table_model import TrackTableModel
-from musearc.ui.main_window_helpers import _apply_button_scale
-from musearc.ui.long_task import run_modal_task
 
 logger = logging.getLogger(__name__)
 
@@ -159,10 +159,10 @@ def _safe_int(value, default: int = 0) -> int:
 def _marker_for_state(state: str) -> str:
     """
     根据排序状态返回对应的标记符号。
-    
+
     Args:
         state: 表示排序状态的字符串，预期为 "asc"、"desc" 或其他值。
-        
+
     Returns:
         对应状态的标记符号：
         - "asc" 返回上箭头 "↑"
@@ -444,7 +444,7 @@ class TrackTableView(QTableView):
 
     def _apply_drag_preview(self, end_row: int) -> None:
         """应用拖拽选择预览。
-    
+
         根据当前的拖拽起点 (`self._drag_origin`) 和参数传入的结束行 (`end_row`)，
         计算并应用一个临时选择范围，以实现拖拽过程中的视觉反馈。
 
@@ -499,14 +499,14 @@ class TrackTableView(QTableView):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         """处理鼠标释放事件。
-    
+
         根据控制器当前模式（普通模式或自定义模式）执行相应操作：
         1. 普通模式下，委托父类处理事件，并触发右键菜单信号。
         2. 自定义模式下，处理拖拽操作结束后的状态重置。
-    
+
         Args:
             event (QMouseEvent): 鼠标事件对象，包含按键类型、位置等信息。
-        
+
         Returns:
             None
         """
@@ -686,16 +686,16 @@ class TrackGridWidget(QWidget):
         # 创建分组模式下拉框
         self.combo_group = QComboBox()
         self.combo_group.addItem("不分组", "none")
-    
+
         # 创建多选和编辑模式复选框
         self.chk_multi = QCheckBox("多选模式")
         self.chk_edit_mode = QCheckBox("编辑模式")
-    
+
         # 创建功能按钮
         self.btn_invert = QPushButton("反选")
         self.btn_save_selection = QPushButton("保存选中")
         self.btn_apply_snapshot = QPushButton("应用选中记录")
-    
+
         # 创建选中记录下拉框
         self.snapshot_combo = QComboBox()
         self.snapshot_combo.setMinimumWidth(170)  # 设置最小宽度
@@ -715,7 +715,7 @@ class TrackGridWidget(QWidget):
         self.model = TrackTableModel()
         self.table = TrackTableView(self.controller)
         self.table.setModel(self.model)
-    
+
         # 配置表格水平表头属性
         self.table.horizontalHeader().setStretchLastSection(False)  # 最后一列不自动拉伸
         self.table.horizontalHeader().setSectionsMovable(True)  # 允许拖动列头调整顺序
@@ -735,44 +735,44 @@ class TrackGridWidget(QWidget):
 
         # 连接表格列头点击信号到排序处理函数
         self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
-    
+
         # 连接列头移动信号到排序同步函数
         self.table.horizontalHeader().sectionMoved.connect(lambda *_args: self._sync_sort_from_header())
-    
+
         # 连接分组模式变化信号
         self.combo_group.currentIndexChanged.connect(self._on_group_changed)
-    
+
         # 连接多选模式切换信号
         self.chk_multi.toggled.connect(self._on_toggle_multi)
-    
+
         # 连接编辑模式切换信号
         self.chk_edit_mode.toggled.connect(self._on_toggle_edit_mode)
-    
+
         # 连接反选按钮点击信号
         self.btn_invert.clicked.connect(self._on_invert_selection)
-    
+
         # 连接保存选中按钮点击信号
         self.btn_save_selection.clicked.connect(self._on_save_snapshot)
-    
+
         # 连接应用选中记录按钮点击信号
         self.btn_apply_snapshot.clicked.connect(self._on_apply_snapshot)
-    
+
         # 连接模型中轨道字段编辑信号
         self.model.track_field_edited.connect(self._on_model_track_field_edited)
-    
+
         # 连接表格点击和双击信号
         self.table.clicked.connect(self._on_table_clicked)
         self.table.doubleClicked.connect(self._on_table_double_clicked)
-    
+
         # 连接自定义上下文菜单请求信号
         self.table.context_menu_requested.connect(self._on_context_menu_requested)
-    
+
         # 连接控制编辑请求信号
         self.table.ctrl_edit_requested.connect(self._on_ctrl_edit_requested)
-    
+
         # 连接表格选择变化信号到状态刷新函数
         self.table.selectionModel().selectionChanged.connect(lambda *_args: self._refresh_status())
-    
+
         # 设置模型的空编辑确认回调
         self.model.set_confirm_empty_edit_callback(self._confirm_empty_edit)
 
@@ -855,9 +855,9 @@ class TrackGridWidget(QWidget):
 
     def _refresh_status(self) -> None:
         """更新状态栏显示。
-    
+
         根据当前已选中的轨道数量，刷新界面底部的状态栏文本。
-    
+
         参数：
             无。
         返回值：
@@ -1207,10 +1207,10 @@ class TrackGridWidget(QWidget):
 
     def _on_table_double_clicked(self, index: QModelIndex) -> None:
         """处理表格双击事件。当双击组行时切换组状态，当双击歌词文件名列时触发字段编辑信号。
-    
+
         参数：
             index (QModelIndex): 被双击的索引。
-    
+
         返回值：
             None
         """
@@ -1403,13 +1403,13 @@ class LyricsTableModel(DictTableModel):
 
     def __init__(self, columns: list[ColumnDef], parent=None):
         """初始化方法。
-    
+
         功能：初始化实例，设置列定义和父组件，并初始化排序状态映射。
-    
+
         参数：
         - columns (list[ColumnDef]): 列定义列表，定义表格的列结构。
         - parent (可选): 父组件，默认为None，用于建立组件间的父子关系。
-    
+
         返回值：无。
         """
         # 调用父类的初始化方法，传递列定义和父组件以继承父类功能
@@ -1443,10 +1443,10 @@ class LyricsTableModel(DictTableModel):
 
     def flags(self, index: QModelIndex):
         """根据索引返回项目的显示标志
-    
+
         Args:
             index (QModelIndex): 要查询的模型索引
-        
+
         Returns:
             Qt.ItemFlag: 返回项目的标志组合，包括启用、可选和可编辑等属性
         """

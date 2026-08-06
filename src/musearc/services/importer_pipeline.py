@@ -9,11 +9,11 @@ from __future__ import annotations
 import difflib
 import html
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 from musearc.core.enums import DuplicateDecision, FileHealth, ReviewKind
 from musearc.core.hashing import sha1_text
@@ -24,10 +24,14 @@ from musearc.core.text_normalize import lrc_visible_lines, normalize_text
 from musearc.infra.db.repositories import LibraryRepository
 from musearc.infra.media.commands import MediaCommandError
 from musearc.infra.media.prober import repair_metadata_text
-from musearc.services.import_runtime import ImportControl, ResumeState, delete_resume_state, load_resume_state, resume_state_path
-from musearc.services.lyrics_match import read_text_guess_encoding
-from musearc.services.scanner import scan_import_source
-
+from musearc.services.dedupe import infer_track_kind
+from musearc.services.import_runtime import (
+    ImportControl,
+    ResumeState,
+    delete_resume_state,
+    load_resume_state,
+    resume_state_path,
+)
 from musearc.services.importer import (
     _build_track_ext_payload,
     _copy_file_and_sha256,
@@ -44,7 +48,8 @@ from musearc.services.importer import (
     _quality_score,
     _utc_now,
 )
-from musearc.services.dedupe import infer_track_kind
+from musearc.services.lyrics_match import read_text_guess_encoding
+from musearc.services.scanner import scan_import_source
 
 
 def run_import_path(
@@ -1055,7 +1060,7 @@ def run_import_path(
                     )
                     for candidate, _relpath, _source_key, _probe in batch
                 ]
-                for (candidate, relpath, source_key, probe), future in zip(batch, futures):
+                for (candidate, relpath, source_key, probe), future in zip(batch, futures, strict=False):
                     cancelled, mode = service._wait_control(control, emit, relpath, on_paused=on_pause_checkpoint)
                     if cancelled:
                         return _cancelled_report(relpath, mode)
@@ -1329,12 +1334,19 @@ def run_import_path(
             library_same, library_other = _split_track_records_by_dir(library_track_records, lyrics_dir_key)
             same_folder_pool = _merge_track_records(batch_same, library_same)
             cross_folder_pool = _merge_track_records(batch_other, library_other)
-            def _match_rules(pool: list[dict], *, scope: str) -> dict | None:
+            def _match_rules(
+                pool: list[dict],
+                *,
+                scope: str,
+                title_hint: str,
+                artist_hint: str,
+                filename_hint: str,
+            ) -> dict | None:
                 # 1) 优先用歌词 ti 元数据匹配歌曲 title，命中即作为强匹配
                 track = _find_best_exact_title_match(
                     pool,
-                    title_hint=lyrics_title,
-                    artist_hint=lyrics_artist,
+                    title_hint=title_hint,
+                    artist_hint=artist_hint,
                 )
                 if track:
                     return {
@@ -1349,8 +1361,8 @@ def run_import_path(
                 # 2) ti 未命中后：文件名->文件名；再尝试 歌词标题->文件名
                 track = _find_best_filename_match(
                     pool,
-                    filename_hint=candidate.path.stem,
-                    artist_hint=lyrics_artist,
+                    filename_hint=filename_hint,
+                    artist_hint=artist_hint,
                 )
                 if track:
                     return {
@@ -1363,8 +1375,8 @@ def run_import_path(
                     }
                 track = _find_best_filename_match(
                     pool,
-                    filename_hint=lyrics_title,
-                    artist_hint=lyrics_artist,
+                    filename_hint=title_hint,
+                    artist_hint=artist_hint,
                 )
                 if track:
                     return {
@@ -1377,9 +1389,21 @@ def run_import_path(
                     }
                 return None
 
-            match_result = _match_rules(same_folder_pool, scope="same_folder")
+            match_result = _match_rules(
+                same_folder_pool,
+                scope="same_folder",
+                title_hint=lyrics_title,
+                artist_hint=lyrics_artist,
+                filename_hint=candidate.path.stem,
+            )
             if match_result is None and cross_folder_pool:
-                match_result = _match_rules(cross_folder_pool, scope="cross_folder")
+                match_result = _match_rules(
+                    cross_folder_pool,
+                    scope="cross_folder",
+                    title_hint=lyrics_title,
+                    artist_hint=lyrics_artist,
+                    filename_hint=candidate.path.stem,
+                )
 
             lyrics_group_key, lyrics_group_title = resolve_lyrics_group_key(relpath, text)
             lyrics_suggestions = build_lyrics_suggestions(

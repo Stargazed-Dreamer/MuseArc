@@ -20,15 +20,15 @@ class SelectionController:
 
     def set_mode(self, mode: SelectionMode, total_rows: int, force_save_threshold: int) -> None:
         """设置选择模式。
-    
+
         功能：将当前选择模式切换为指定的模式，并在切换前根据条件保存快照，
              切换后根据新模式调整已选行的状态。
-    
+
         参数：
             mode (SelectionMode): 目标选择模式（如MULTI或NORMAL）。
             total_rows (int): 数据总行数，用于验证和调整已选行。
             force_save_threshold (int): 强制保存阈值，当已选行数超过此值时触发保存。
-    
+
         返回值：
             None: 无返回值。
         """
@@ -36,15 +36,15 @@ class SelectionController:
         if self.mode == SelectionMode.MULTI and mode == SelectionMode.NORMAL:
             if len(self.selected_rows) > force_save_threshold and not self.saved_this_session:
                 self.save_snapshot()
-    
+
         # 更新当前模式
         self.mode = mode
-    
+
         # 如果是单选模式，过滤无效的已选行，并确保至少选中一行
         if self.mode == SelectionMode.NORMAL:
             # 过滤出有效的行索引（0到total_rows-1之间）
             self.selected_rows = {r for r in self.selected_rows if 0 <= r < total_rows}
-        
+
             # 如果过滤后没有选中行且总行数大于0，则默认选中焦点行或第一行
             if not self.selected_rows and total_rows > 0:
                 # 确定焦点行，若无则默认为0
@@ -78,10 +78,10 @@ class SelectionController:
     def multi_click_toggle(self, row: int) -> None:
         """
         切换指定行在选中行集合中的状态，并更新锚点行和焦点行以反映最新操作。
-    
+
         参数:
             row (int): 要切换的行索引。
-    
+
         返回值:
             None
         """
@@ -128,12 +128,12 @@ class SelectionController:
     def page_focus(self, total_rows: int, visible_rows: int, direction: int) -> int:
         """
         实现分页焦点移动功能，通过调整步长在指定方向移动焦点。
-    
+
         参数:
             total_rows (int): 总行数。
             visible_rows (int): 可见行数。
             direction (int): 移动方向，正数表示向下移动，负数表示向上移动。
-    
+
         返回:
             int: 调用move_focus方法后的结果，表示焦点移动后的位置或状态。
         """
