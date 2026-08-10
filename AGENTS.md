@@ -54,7 +54,7 @@ start.bat
 ### 媒体处理
 
 - **必须**用 PyAV（`av` 库）做音频解码，**绝不**依赖 ffmpeg.exe 外部进程
-- Chromaprint DLL 内置在 `tools/chromaprint/bin/`，Windows 专用
+- Chromaprint 指纹库的加载按平台分支：Windows 走内置 `tools/chromaprint/bin/` DLL；Linux/macOS 依赖系统库（`apt install chromaprint-tools` / `brew install chromaprint`），**绝不**假设 DLL 在所有平台可用
 - 指纹提取在 `infra/media/fingerprint.py`，标签读写用 mutagen
 
 ### UI 层
@@ -69,11 +69,41 @@ start.bat
 - LM Studio 通过 OpenAI 兼容接口通信，配置在 `config/models.py` 的 `LmStudioConfig`
 - 默认关闭（`enabled=False`），需用户手动开启
 - 仅用于歌词匹配评分，**绝不**用于自动决策
+- **绝不**将 LLM 调用指向任何外部云端服务，**绝不**在代码或配置模板中写入真实 API key / endpoint
+
+### 隐私保护（公开发布硬约束）
+
+本项目已公开，所有提交、文档、配置、对话存档都会被外部读到。每次改动都必须遵守：
+
+- **绝不**在源码、注释、文档、commit message、对话存档中写入个人可识别信息：真实姓名、个人邮箱、个人 GitHub 账号、个人手机号 / QQ / 微信、个人 NAS / 内网 IP / 内网域名
+- **绝不**硬编码个人绝对路径：`C:\Users\<真实用户名>\`、`F:\codex\`、`E:\#Working\` 等盘符 + 个人目录组合；用户目录一律用 `Path.home()` 动态获取，示例路径用 `<your_...>` 占位符
+- **绝不**在仓库中保留个人开发记录文件（对话存档、个人 todo、需求草稿等）；这类文件**必须**加入 `.gitignore`
+- 真实音乐库内容（具体歌名 + 歌手 + 个人歌单命名）属个人隐私，**绝不**写入文档或测试 fixture；测试用通用占位数据
+- 敏感文件**必须**被 `.gitignore` 排除：`realLib/`、`*.db`、`*.db-journal`、`*.db-wal`、`*.db-shm`、`config.json`、`config.toml`、`*.muse_playlist.json`、`*.muse_stats.json`、个人记录类 txt
+- 引用第三方服务时只用公共 endpoint（如 `https://lrclib.net/api/get`）和 `127.0.0.1` 本地示例，**绝不**写入私有服务器地址
+- 提交前自检：`git log` author、新增文档示例路径、配置模板值是否含个人信息
+
+### 跨平台兼容（公开发布硬约束）
+
+项目目标支持 Windows / Linux / macOS。架构本身已良好跨平台（core / services / app / infra 的 db/player/llm/media 大部分均为纯跨平台代码），新增改动**必须**保持跨平台，避免引入新的平台绑定：
+
+- **绝不**硬编码平台专属命令。需要调用外部进程时按 `sys.platform` 分支，例如"在文件管理器中显示"：
+  - Windows：`explorer /select,<path>`
+  - macOS：`open -R <path>`
+  - Linux：`xdg-open <parent_dir>`
+  - 建议抽取跨平台工具函数集中维护，**绝不**在多处重复写 `explorer /select,`
+- **绝不**硬编码 Windows 盘符路径（`C:\`、`C:/Program Files/...`）或 `.exe` 后缀假设。可执行文件查找用 `shutil.which()`，文件对话框过滤器按平台调整
+- **绝不**硬编码路径分隔符。用 `pathlib.Path` 或 `os.path.join`；路径比较前用 `replace("\\", "/")` 归一化（POSIX 上为 no-op，安全）
+- DLL / 共享库加载按平台分支：Windows 用 `os.add_dll_directory` + 内置 DLL；Linux/macOS 依赖系统库，不查找 `.dll`
+- 配置目录按平台规范选择：Windows `%APPDATA%/MuseArc`、macOS `~/Library/Application Support/MuseArc`、Linux `${XDG_CONFIG_HOME:-~/.config}/musearc`，保留 `~/.musearc` 兜底
+- 启动脚本：保留 `start.bat`（Windows），**必须**提供 `start.sh`（Linux/macOS）
+- 新增系统级依赖时，在 `pyproject.toml` 与 README/CONTRIBUTING 中说明各平台安装方式
+- 提交前自检：新增代码是否含 `explorer`、`C:\`、`.exe`、`os.add_dll_directory` 等平台专属符号且无 `sys.platform` 分支
 
 ### 常见陷阱
 
 - **PyAV 导入**：`import av` 即可，不要尝试 `pip install ffmpeg-python`，这是两个不同的库
-- **Chromaprint 路径**：DLL 路径在运行时通过 `tools/chromaprint/bin/` 解析，**绝不**硬编码绝对路径
+- **Chromaprint 路径**：Windows 下 DLL 路径在运行时通过 `tools/chromaprint/bin/` 解析（**绝不**硬编码绝对路径）；Linux/macOS 依赖系统安装的 `libchromaprint`，`tools/chromaprint/bin/` 中的 DLL 在非 Windows 平台无效，加载失败会优雅降级（指纹功能不可用但不崩溃）
 - **SQLite 并发**：本项目是单进程桌面应用，使用 `with db.session()` 每次创建并关闭连接（无连接池复用）。`connection.py` 会尝试启用 WAL 模式以提升多线程读取并发（导入 worker 线程读取时不阻塞 UI 查询），在只读/受限环境自动回退；**绝不**使用多连接池
 - **QThread**：`import_worker.py` 中的 worker **必须**用信号槽通信，**绝不**直接操作 UI 控件
 
@@ -110,8 +140,7 @@ MuseArc/
 │   │   │   ├── prober.py       # 媒体探测
 │   │   │   ├── tag_writer.py   # 标签读写（mutagen）
 │   │   │   ├── transcoder.py   # PyAV 转码
-│   │   │   ├── commands.py     # MediaCommandError 异常基类
-│   │   │   └── ffmpeg_tools.py # ffmpeg 路径查找（保留,当前未使用）
+│   │   │   └── commands.py     # MediaCommandError 异常基类
 │   │   └── player/client.py    # 外部播放器 TCP JSON Lines 客户端
 │   ├── services/               # 领域服务层
 │   │   ├── importer.py         # 导入服务
@@ -157,7 +186,7 @@ MuseArc/
 │   ├── data/lyrics/            # 归档歌词文件
 │   └── manifests/              # 元数据与状态
 ├── tools/                      # 外部工具
-│   ├── chromaprint/bin/        # Chromaprint DLL（Windows）
+│   ├── chromaprint/bin/        # Chromaprint DLL（仅 Windows 分发用；Linux/macOS 依赖系统库）
 │   └── export_build.py         # 导出构建脚本
 ├── docs/                       # 项目文档（见 docs/README.md 索引）
 ├── .agents/skills/             # Skill 定义文件
@@ -171,7 +200,8 @@ MuseArc/
 ├── LICENSE                     # MIT 许可证
 ├── CONTRIBUTING.md             # 贡献指南
 ├── CHANGELOG.md                # 更新日志
-└── start.bat                   # Windows 快速启动
+├── start.bat                   # Windows 快速启动
+└── start.sh                    # Linux/macOS 快速启动
 ```
 
 ## Skill 系统

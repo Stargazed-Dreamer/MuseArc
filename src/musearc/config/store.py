@@ -1,7 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 from .models import ImportThresholds, RuntimeConfig
@@ -53,10 +54,11 @@ def _config_dir() -> Path:
     """获取配置目录。
 
     该函数用于确定应用程序的配置目录路径。它会检查多个候选目录位置，
-    并返回第一个可写的目录路径。优先级依次为：
-    1. Windows系统下的APPDATA环境变量对应目录下的"MuseArc"子目录。
-    2. 用户主目录下的".musearc"隐藏目录。
-    3. 当前工作目录下的".musearc"隐藏目录。
+    并返回第一个可写的目录路径。优先级按平台规范：
+    - Windows：%APPDATA%/MuseArc
+    - macOS：~/Library/Application Support/MuseArc
+    - Linux：${XDG_CONFIG_HOME:-~/.config}/musearc
+    兜底候选：~/.musearc、./.musearc
 
     Args:
         无参数。
@@ -66,15 +68,25 @@ def _config_dir() -> Path:
     """
     candidates: list[Path] = []
 
-    # 获取Windows系统的APPDATA环境变量
-    app_data = os.getenv("APPDATA")
-    if app_data:
-        # 如果环境变量存在，将其下的"MuseArc"目录作为首选候选
-        candidates.append(Path(app_data) / "MuseArc")
+    # 按平台规范选择配置目录
+    if sys.platform == "win32":
+        # Windows：%APPDATA%/MuseArc
+        app_data = os.getenv("APPDATA")
+        if app_data:
+            candidates.append(Path(app_data) / "MuseArc")
+    elif sys.platform == "darwin":
+        # macOS：~/Library/Application Support/MuseArc
+        candidates.append(Path.home() / "Library" / "Application Support" / "MuseArc")
+    else:
+        # Linux/POSIX：遵循 XDG Base Directory 规范
+        xdg_config = os.getenv("XDG_CONFIG_HOME")
+        if xdg_config:
+            candidates.append(Path(xdg_config) / "musearc")
+        else:
+            candidates.append(Path.home() / ".config" / "musearc")
 
-    # 将用户主目录下的".musearc"目录作为次选候选
+    # 兜底候选
     candidates.append(Path.home() / ".musearc")
-    # 将当前工作目录下的".musearc"目录作为末选候选
     candidates.append(Path.cwd() / ".musearc")
 
     # 从所有候选目录中选择一个可写的目录并返回

@@ -6,7 +6,6 @@ from __future__ import annotations
 """
 
 import re
-import subprocess
 from collections import defaultdict, deque
 from pathlib import Path
 
@@ -24,6 +23,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from musearc.ui.main_window_helpers import reveal_path_in_file_manager
 
 
 def _safe_float(value, default: float = 0.0) -> float:
@@ -352,23 +353,12 @@ class ReviewPageLyricsMixin:
         return row_ctrl
 
     def _reveal_lyrics_file(self, row: dict) -> None:
-        """
-        功能：在资源管理器中显示歌词文件的位置。
-        参数：
-            row: dict，包含存储路径信息的字典，预期键包括"storage_relpath"。
-        返回值：无。
-        """
-        storage_rel = str((row or {}).get("storage_relpath", "") or "").strip()  # 安全获取存储路径字符串，处理None或空值
-        if not storage_rel:  # 如果存储路径为空，直接返回，避免后续操作
+        """在文件管理器中显示歌词文件的位置。"""
+        storage_rel = str((row or {}).get("storage_relpath", "") or "").strip()
+        if not storage_rel:
             return
-        target = Path(self.facade.library_root) / storage_rel  # 构建目标文件的完整路径，使用库根目录和相对路径拼接
-        try:
-            if target.exists():  # 如果目标文件存在，在资源管理器中选择该文件
-                subprocess.Popen(["explorer", "/select,", str(target)])
-            elif target.parent.exists():  # 否则，如果父目录存在，在资源管理器中打开该目录
-                subprocess.Popen(["explorer", str(target.parent)])
-        except Exception:  # 捕获所有异常，静默返回，避免程序中断
-            return
+        target = Path(self.facade.library_root) / storage_rel
+        reveal_path_in_file_manager(target)
 
     def _on_lyrics_row_clicked(self, row: dict) -> None:
         """\u66f4\u65b0\u6b4c\u8bcd\u53cc\u680f\u9884\u89c8\u961f\u5217\uff08\u6700\u8fd1\u4e24\u4e2a\u6761\u76ee\uff09\u3002"""

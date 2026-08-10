@@ -39,9 +39,23 @@ testLib/
 config.json
 config.toml
 
+# ===== SQLite 数据库及其 WAL/SHM 产物(兜底排除,即使被意外移出 realLib/) =====
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # ===== 运行时产物:导出歌单 / 播放统计 =====
 *.muse_playlist.json
 *.muse_stats.json
+
+# ===== 个人开发记录文件(对话存档/需求草稿/临时 todo,勿入库) =====
+对话存档.txt
+需求_old.txt
+todo.txt
+
+# ===== 临时工作文档(发布对齐等,勿入库) =====
+.trae/release_plan.md
 
 # ===== 临时工作区(歌词 LLM 审核等一次性产物) =====
 lyrics_llm_review/

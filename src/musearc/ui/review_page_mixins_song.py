@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """审查页面-歌曲审查区 Mixin。
 
@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from musearc.ui.main_window_helpers import reveal_path_in_file_manager
 
 
 def _safe_float(value, default: float = 0.0) -> float:
@@ -264,26 +266,10 @@ class ReviewPageSongMixin:
     参数：path_text (str) - 要打开的路径或文件路径。
     返回值：None - 无返回值。
     """
-        # 将path_text转换为字符串，如果为None则使用空字符串，并去除首尾空白
         target_text = str(path_text or "").strip()
-        # 如果路径文本为空，则直接返回
         if not target_text:
             return
-        try:
-            # 创建Path对象
-            target = Path(target_text)
-            # 如果路径存在且是文件，则打开文件管理器并选择该文件
-            if target.exists() and target.is_file():
-                subprocess.Popen(["explorer", "/select,", str(target)])
-            # 如果路径存在（可能是目录），则打开该目录
-            elif target.exists():
-                subprocess.Popen(["explorer", str(target)])
-            # 如果路径不存在但父目录存在，则打开父目录
-            elif target.parent.exists():
-                subprocess.Popen(["explorer", str(target.parent)])
-        # 捕获所有异常，防止程序崩溃
-        except Exception:
-            return
+        reveal_path_in_file_manager(target_text)
 
     def _fill_song_tree(self, rows: list[dict]) -> None:
         """\u6784\u5efa\u6b4c\u66f2\u5ba1\u67e5\u5206\u7ec4\u754c\u9762\uff08\u6bcf\u7ec4\u72ec\u7acb frame\uff09\u3002"""

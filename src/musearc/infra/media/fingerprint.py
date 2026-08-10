@@ -1,10 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import base64
 import hashlib
 import importlib
 import os
 import shutil
+import sys
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -16,18 +17,18 @@ from .audio_io import decode_audio
 
 
 def _prepare_chromaprint_runtime() -> None:
-    """准备Chromaprint运行环境，配置必要的动态链接库路径。
+    """准备 Chromaprint 运行环境。
 
-    该函数会尝试查找并配置Chromaprint库的运行环境，包括从环境变量指定的路径、
-    项目特定工具目录中查找动态链接库，并将其添加到系统PATH环境变量中，
-    同时处理Windows系统下的DLL目录注册。
-
-    参数:
-        无参数
-
-    返回值:
-        None: 该函数没有返回值，通过修改环境变量来准备运行环境
+    - Windows：从环境变量 MUSEARC_CHROMAPRINT_BIN 或内置 tools/chromaprint/bin/ 查找 DLL，
+      注册到 PATH 与 add_dll_directory。
+    - Linux/macOS：依赖系统安装的 libchromaprint（apt install chromaprint-tools /
+      brew install chromaprint），pychromaprint 的 find_library 会自动发现系统库，
+      无需手动加载。
     """
+    if sys.platform != "win32":
+        # 非 Windows 依赖系统库，无需手动查找 DLL
+        return
+
     candidates: list[Path] = []  # 存储所有可能的Chromaprint二进制文件路径候选
     env_bin = str(os.environ.get("MUSEARC_CHROMAPRINT_BIN", "")).strip()  # 从环境变量获取自定义路径
     if env_bin:  # 如果环境变量有值

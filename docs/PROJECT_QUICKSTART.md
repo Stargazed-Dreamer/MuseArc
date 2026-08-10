@@ -160,7 +160,7 @@ realLib/
 ## 8. 注意事项
 
 - `importer_pipeline.py` 是单函数 ~1400 行，闭包嵌套深，修改需注意作用域
-- 音频指纹依赖 `chromaprint`（`tools/chromaprint/bin/` 下有 Windows DLL）
+- 音频指纹依赖 `chromaprint`（Windows 下 DLL 内置在 `tools/chromaprint/bin/`；Linux/macOS 需安装系统库：`apt install chromaprint-tools` / `brew install chromaprint`）
 - 歌词匹配在 pipeline 中已内联实现，`lyrics_match.py` 的 `LyricsMatcher` 仅用于纯音乐占位匹配
 - 数据库操作在 `with self.ctx.db.session() as conn:` 上下文中执行
 - UI 信号通过 `ImportWorker.progress` 传递 `ImportProgress` 字典

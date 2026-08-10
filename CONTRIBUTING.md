@@ -8,7 +8,7 @@
 
 - Python >= 3.11
 - [uv](https://docs.astral.sh/uv/) 包管理器
-- Windows(主开发与运行平台;Chromaprint DLL 仅 Windows 可用)
+- Windows / Linux / macOS（跨平台支持；Windows 开箱即用，Linux/macOS 需安装系统 chromaprint 库：`apt install chromaprint-tools` / `brew install chromaprint`）
 
 ### 初始化
 

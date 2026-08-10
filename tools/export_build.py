@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import shutil
@@ -16,8 +16,10 @@ COPY_ITEMS = [
     "src",
     "pyproject.toml",
     "README.md",
-    "tools/chromaprint/bin",
 ]
+# Chromaprint DLL 仅 Windows 构建时包含；Linux/macOS 依赖系统库
+if sys.platform == "win32":
+    COPY_ITEMS.append("tools/chromaprint/bin")
 COPY_IGNORE = shutil.ignore_patterns(
     "__pycache__",
     "*.pyc",

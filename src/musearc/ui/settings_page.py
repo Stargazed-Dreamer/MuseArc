@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+import sys
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -287,7 +289,7 @@ class SettingsPage(QWidget):
             self,
             "选择外部播放器可执行文件",
             self.input_player_path.text().strip(),  # 从输入框获取当前文本作为默认路径，并去除首尾空格
-            "可执行文件 (*.exe);;所有文件 (*.*)",  # 定义文件类型过滤器
+            "可执行文件 (*.exe);;所有文件 (*.*)" if sys.platform == "win32" else "所有文件 (*)",
         )
         if path:  # 检查用户是否选择了文件（path非空）
             self.input_player_path.setText(path)  # 将选择的文件路径设置到输入框中

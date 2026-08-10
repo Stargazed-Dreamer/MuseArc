@@ -1,6 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, Qt
@@ -478,6 +479,40 @@ def _storage_path_for_track_row(facade: MuseArcFacade, row: dict) -> str:
     return str(row.get("source_fullpath", "") or "").strip()
 
 
+def reveal_path_in_file_manager(path: Path | str) -> bool:
+    """跨平台在文件管理器中定位路径。
+
+    - Windows：explorer /select,<file> 或 explorer <dir>
+    - macOS：open -R <file> 或 open <dir>
+    - Linux/POSIX：xdg-open <file 的父目录> 或 <dir>
+
+    若目标不存在，回退到父目录。成功返回 True，失败返回 False。
+    """
+    target = Path(path)
+    if not target.exists():
+        parent = target.parent
+        if parent.exists():
+            target = parent
+        else:
+            return False
+    try:
+        if sys.platform == "win32":
+            if target.is_file():
+                subprocess.Popen(["explorer", "/select,", str(target)])
+            else:
+                subprocess.Popen(["explorer", str(target)])
+        elif sys.platform == "darwin":
+            if target.is_file():
+                subprocess.Popen(["open", "-R", str(target)])
+            else:
+                subprocess.Popen(["open", str(target)])
+        else:  # Linux 等 POSIX
+            subprocess.Popen(["xdg-open", str(target.parent if target.is_file() else target)])
+        return True
+    except Exception:
+        return False
+
+
 def _reveal_in_file_manager(parent: QWidget, path_text: str) -> None:
     """
     功能：在文件管理器（如Windows资源管理器）中定位指定路径的文件或目录，若路径无效则显示提示或错误。
@@ -486,33 +521,12 @@ def _reveal_in_file_manager(parent: QWidget, path_text: str) -> None:
         path_text (str): 要定位的路径文本，可能是文件或目录路径。
     返回值：None（无返回值）。
     """
-    # 将输入路径文本转换为字符串，如果为空则使用空字符串，并去除首尾空格
     text = str(path_text or "").strip()
-    # 如果路径文本为空，显示提示信息并直接返回
     if not text:
         QMessageBox.information(parent, "文件管理器", "当前项没有可定位的文件路径。")
         return
-    # 将文本转换为Path对象，便于路径操作
-    path = Path(text)
-    # 初始化目标路径为原始路径
-    target = path
-    # 如果目标路径不存在，尝试定位到其父目录
-    if not target.exists():
-        parent_dir = target.parent  # 获取父目录路径
-        # 如果父目录存在，则将目标路径更新为父目录
-        if parent_dir.exists():
-            target = parent_dir
-    # 尝试执行文件管理器操作，处理可能的异常
-    try:
-        # 如果目标路径是文件，使用explorer打开并选中该文件
-        if target.is_file():
-            subprocess.Popen(["explorer", "/select,", str(target)])
-        # 否则（目标路径是目录），使用explorer打开该目录
-        else:
-            subprocess.Popen(["explorer", str(target)])
-    # 捕获所有异常，并显示错误信息
-    except Exception as exc:
-        QMessageBox.critical(parent, "文件管理器", str(exc))
+    if not reveal_path_in_file_manager(text):
+        QMessageBox.critical(parent, "文件管理器", "无法定位文件路径。")
 
 
 def _ask_delete_tracks_with_lyrics(parent: QWidget, count: int, default_mode: str) -> tuple[str, bool]:

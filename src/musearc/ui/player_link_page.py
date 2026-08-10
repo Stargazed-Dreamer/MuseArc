@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal
@@ -27,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from musearc.app.facade import FAVORITES_PLAYLIST_ID, MuseArcFacade, PlayerClient, PlayerClientError
+from musearc.ui.main_window_helpers import reveal_path_in_file_manager
 from musearc.ui.table_models import ColumnDef, DictTableModel
 
 logger = logging.getLogger(__name__)
@@ -1079,16 +1079,7 @@ class PlayerLinkPage(QWidget):
 
     @staticmethod
     def _reveal_in_explorer(file_path: str) -> None:
-        target = Path(file_path)
-        if not target.exists():
-            target = target.parent
-        try:
-            if target.is_file():
-                subprocess.Popen(["explorer", "/select,", str(target)])
-            else:
-                subprocess.Popen(["explorer", str(target)])
-        except Exception:
-            pass
+        reveal_path_in_file_manager(file_path)
 
     def _run_worker(self, worker: QObject, callback) -> None:
         """在子线程中运行 worker，完成后调用 callback。
