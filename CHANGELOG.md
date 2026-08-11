@@ -10,7 +10,7 @@
 - **core/constants.py**:集中共享常量(`FAVORITES_PLAYLIST_ID`/`FAVORITES_PLAYLIST_NAME`/`DEFAULT_TAG_FIELD`/`DEFAULT_TAG_FIELDS`/偏好等级范围),消除 4 处重复定义
 - **infra/logging.py**:统一日志配置模块 `configure_logging()`,提供格式化输出与可选文件落盘
 - **tests/**:自动化测试骨架(conftest.py + core 层纯函数测试 43 项,覆盖 `text_normalize`/`pinyin`/`hashing`/`ids`)
-- **LICENSE**:MIT 许可证
+- **LICENSE**:GPL v3 许可证
 - **CONTRIBUTING.md**:贡献指南(开发环境、架构约束、测试、提交规范)
 - **CHANGELOG.md**:本文件
 - **config.json.example**:配置文件模板(含全部默认字段)

@@ -197,7 +197,7 @@ MuseArc/
 ├── .github/workflows/          # CI/CD（lint + test）
 ├── pyproject.toml              # 项目配置、依赖、构建、工具链
 ├── config.json.example         # 配置文件模板（含全部默认字段）
-├── LICENSE                     # MIT 许可证
+├── LICENSE                     # GPL v3 许可证
 ├── CONTRIBUTING.md             # 贡献指南
 ├── CHANGELOG.md                # 更新日志
 ├── start.bat                   # Windows 快速启动
