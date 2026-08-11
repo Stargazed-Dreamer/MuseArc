@@ -23,7 +23,7 @@ MuseArc 是面向超大、混乱歌曲库的清洗与统一管理桌面工具。
 
 **批量导入归档与断点恢复流水线**
 
-不是简单的"导入"，而是一个带状态机、增量缓存、按需落盘、可回滚的工业级流水线。支持扫描源目录 → 音频/歌词探测 → 指纹生成 → 去重判定 → 入库或入审查队列。具备断点恢复、暂停/取消、状态清单、路径级快速跳过索引，处理超大批量混乱歌曲库时能极大降低重复工作量。
+带状态机、增量缓存、按需落盘、可回滚的工业级流水线。支持扫描源目录 → 音频/歌词探测 → 指纹生成 → 去重判定 → 入库或入审查队列。具备断点恢复、暂停/取消、状态清单、路径级快速跳过索引，处理超大批量混乱歌曲库时能极大降低重复工作量。
 
 **音频指纹去重（Chromaprint + hash32 汉明预筛）**
 
@@ -41,10 +41,6 @@ MuseArc 是面向超大、混乱歌曲库的清洗与统一管理桌面工具。
 
 内置 LRCLIB 歌词补全窗口，支持按条件筛选未链接歌词的歌曲，批量请求 LRCLIB API 补全，并提供确认与进度反馈流程。补全本地匹配失败后的在线兜底路径，形成完整的歌词获取闭环。
 
-**审查队列系统（多类型、优先级、分组）**
-
-统一的审查队列支持四种类型（DUPLICATE/LYRICS_MATCH/METADATA_CONFLICT/FILE_ISSUE），带优先级、状态流转（pending/resolved/ignored）、分组键。歌词审查支持按 group_key 聚合显示，减少重复操作，让用户能高效处理大量待审项。
-
 **全量扫描工作**
 
 导入后的"二次清洗"利器。可创建"全量歌曲筛选"工作，支持基于元数据相似（标题+艺术家归一化相同、时长差≤10s）或基于音频指纹相似（指定分数区间）自动筛选疑似重复歌曲，加入工作队列逐项处理。指纹相似度筛选支持多进程并行。
@@ -57,22 +53,11 @@ MuseArc 是面向超大、混乱歌曲库的清洗与统一管理桌面工具。
 
 支持将曲目按统一格式计划导出（mp3/flac/wav/m4a/aac/opus/ogg/wma/ape），同格式直接复制，异格式用 PyAV 转码，可同时导出绑定的歌词文件（.lrc）。适合导出到不同播放器场景。
 
-**内置 + 外部播放器联动**
-
-内置基于 QMediaPlayer 的播放栏（上一首/播放/下一首/进度/音量/设备自动切换）；同时支持通过 TCP JSON Lines 协议与外部播放器联动，支持加载歌单、播放文件、状态查询等命令。双播放器架构满足不同场景需求。
-
-**偏好度评分（Love Score）**
-
-基于播放次数、主动播放比例、完播率、跳过比例、全库播放占比、密集播放信号等多维度加权计算曲目"喜爱度"分数（-100 到 100），让曲库能"自学习"用户偏好。
-
 ### 细节亮点
 
 - **文本乱码修复（Mojibake Repair）**：自动检测拉丁扩展字符异常聚集、U+FFFD 替换符等乱码特征，尝试 UTF-8/GB18030/GBK 等多编码修复并评分选最佳。中文音乐库标签编码混乱是历史遗留痛点，此功能可自动修复。
 - **文本归一化**：NFKC 标准化 + casefold + 括号内容移除 + 特殊字符统一 + CJK 保留，作为去重与匹配的准确性根基。
-- **软删除 + 垃圾箱**：曲目/歌词删除支持软删除（deleted_at 字段），关联歌词可移至垃圾箱目录而非直接删除，支持恢复。
 - **去重候选缓存**：按时长窗口缓存去重候选，新入库曲目增量追加，把 SQL 查询从 O(N) 降到 O(1) 缓存命中。
-- **断点保存节流策略**：按"每 5 个文件或每 0.8 秒"节流保存断点状态，平衡性能与安全。
-- **LLM 隐私友好默认**：LM Studio 默认关闭，仅用于歌词匹配评分绝不用于自动决策，通过本地 OpenAI 兼容接口通信，尊重用户选择权。
 - **Chromaprint 自动发现**：Windows 下从环境变量或内置目录查找 DLL，自动处理别名复制与 reload；Linux/macOS 依赖系统库自动发现，加载失败优雅降级。
 
 ## 跨平台部署
@@ -109,39 +94,6 @@ start.bat
 # Linux/macOS 快捷启动
 ./start.sh
 ```
-
-## 目录结构
-
-> 完整、权威的项目结构见 [AGENTS.md](AGENTS.md)。此处仅给出核心脉络。
-
-```
-MuseArc/
-├── src/musearc/                # 源代码
-│   ├── core/                   # 领域基础层（无副作用）：models / enums / exceptions / constants / hashing / ids / paths / pinyin / text_normalize
-│   ├── config/                 # 配置层：models.py（RuntimeConfig, LmStudioConfig, UiConfig）+ store.py
-│   ├── infra/                  # 基础设施层：logging / db（schema+repositories）/ llm / media（PyAV, Chromaprint, mutagen）/ player
-│   ├── services/               # 领域服务层：importer / dedupe / lyrics_match / exporter / library_ops / scanner
-│   ├── app/                    # 应用外观层：cli + facade（唯一外观入口）+ facade_mixins_* + action_log
-│   ├── ui/                     # 界面层（PySide6）：主窗口、页面、审查页、导入、播放器、设置等
-│   └── ui_contracts/           # UI 契约层
-├── tests/                      # 自动化测试（pytest，目前覆盖 core 层纯函数）
-├── realLib/                    # 实际音乐库数据（gitignore）
-├── tools/                      # 外部工具：chromaprint/bin/（Windows DLL）、export_build.py
-├── docs/                       # 项目文档（见 docs/README.md 索引）
-├── .agents/skills/             # Skill 定义文件（_index.md 为索引）
-├── .trae/rules/                # AI 规则（功能变更检查清单）
-├── .github/workflows/          # CI/CD（ruff lint + pytest）
-├── AGENTS.md                   # Agent 入口文档（项目唯一真相源）
-├── pyproject.toml              # 项目配置、依赖、构建、工具链
-├── config.json.example         # 配置文件模板
-├── LICENSE                     # GPL v3 许可证
-├── CONTRIBUTING.md             # 贡献指南
-├── CHANGELOG.md                # 更新日志
-├── start.bat                   # Windows 快速启动
-└── start.sh                    # Linux/macOS 快速启动
-```
-
-架构分层：`core → infra → services → app → ui`。UI 层绝不直接操作数据库或调用 infra，必须经 `MuseArcFacade`。详见 [AGENTS.md](AGENTS.md)。
 
 ## 快速使用（UI，推荐）
 
@@ -200,24 +152,6 @@ uv run musearc import --source F:/Downloads/MessySongs --library F:/Music/MyMuse
 uv run musearc search --query 晴天 --library F:/Music/MyMuseArcLibrary
 ```
 
-导出：
-
-```bash
-uv run musearc export --track trk_xxx --track trk_yyy --out F:/Exports --fmt mp3 --bitrate 320k --library F:/Music/MyMuseArcLibrary
-```
-
-查看待人工审查：
-
-```bash
-uv run musearc review --library F:/Music/MyMuseArcLibrary
-```
-
-查看运行时配置（LM Studio、UI 行为等）：
-
-```bash
-uv run musearc config show
-```
-
 修改运行时配置（仅传入的参数会被更新，其余保持不变）：
 
 ```bash
@@ -254,23 +188,6 @@ from pypinyin import lazy_pinyin
 
 ch = "晴"
 initial = lazy_pinyin(ch)[0][0].upper()  # Q
-```
-
-## 开发与贡献
-
-- 架构约束、目录约定、Skill 系统：见 [AGENTS.md](AGENTS.md)
-- 贡献流程、提交规范、测试与 lint：见 [CONTRIBUTING.md](CONTRIBUTING.md)
-- 变更历史：见 [CHANGELOG.md](CHANGELOG.md)
-
-```bash
-# 安装开发依赖（含 pytest / ruff / mypy）
-uv sync --extra dev
-
-# 运行测试
-uv run pytest tests/ -v
-
-# Lint
-uv run ruff check src/ tests/
 ```
 
 ## 许可证
