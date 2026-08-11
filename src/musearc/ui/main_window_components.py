@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from musearc.ui.main_window_helpers import (
     ExportPlanDialog,

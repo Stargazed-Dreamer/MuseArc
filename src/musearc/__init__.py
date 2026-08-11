@@ -1,1 +1,1 @@
-﻿"""MuseArc package."""
+"""MuseArc package."""
