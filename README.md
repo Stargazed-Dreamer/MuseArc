@@ -11,6 +11,12 @@ MuseArc 是面向超大、混乱歌曲库的清洗与统一管理桌面工具。
 - 审查队列（机器不确定条目交由人工确认）
 - 歌单导出与播放
 
+<img width="1817" height="1136" alt="musearc全部歌曲" src="https://github.com/user-attachments/assets/a4a59ee9-fca2-40cd-8a18-b9632b414041" />
+<img width="2152" height="1264" alt="musearc歌单管理" src="https://github.com/user-attachments/assets/d6d06dc5-e042-43d9-89c8-c45fedb0ad38" />
+<img width="1817" height="1136" alt="musearc导入管理" src="https://github.com/user-attachments/assets/1a0d95c2-c82e-482b-9a06-6336198844d8" />
+
+
+
 ## 特色功能
 
 ### 核心能力
