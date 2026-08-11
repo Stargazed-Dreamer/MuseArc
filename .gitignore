@@ -54,8 +54,9 @@ config.toml
 需求_old.txt
 todo.txt
 
-# ===== 临时工作文档(发布对齐等,勿入库) =====
-.trae/release_plan.md
+# ===== AI 工具配置与规则(本地开发辅助,勿入库) =====
+.agents/
+.trae/
 
 # ===== 临时工作区(歌词 LLM 审核等一次性产物) =====
 lyrics_llm_review/
