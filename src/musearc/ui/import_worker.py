@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, Signal
 
-from musearc.app.facade import ImportControl, MuseArcFacade
+from musearc.app.facade import MuseArcFacade
+from musearc.services.import_runtime import ImportControl
 
 
 class ImportWorker(QObject):

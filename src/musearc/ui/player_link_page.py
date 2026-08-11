@@ -25,7 +25,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from musearc.app.facade import FAVORITES_PLAYLIST_ID, MuseArcFacade, PlayerClient, PlayerClientError
+from musearc.app.facade import MuseArcFacade
+from musearc.core.constants import FAVORITES_PLAYLIST_ID
+from musearc.infra.player.client import PlayerClient, PlayerClientError
 from musearc.ui.main_window_helpers import reveal_path_in_file_manager
 from musearc.ui.table_models import ColumnDef, DictTableModel
 
